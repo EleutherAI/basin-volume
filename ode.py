@@ -64,19 +64,19 @@ plt.plot(t, losses)
 plt.show()
 
 #%%
-sol.shape
-#%%
 yf = sol[-1]
-
-# run backwards!
 f_back = lambda t, y: -f(t, y)
-sol_back = odeint(f_back, yf, t)
+#%%
+%%time
+# run backwards!
+t_back = torch.arange(0, 4, .2)
+sol_back = odeint(f_back, yf, t_back)
 
 #%%
 
 losses_back = [loss_flat(y).cpu().item() for y in sol_back]
 plt.plot(t, losses, label='forward')
-plt.plot(torch.flip(t, [0]), losses_back, label='backward')
+plt.plot(t[-1] - t_back, losses_back, label='backward')
 plt.legend()
 plt.xlabel('time')
 plt.ylabel('loss')
