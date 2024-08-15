@@ -174,8 +174,11 @@ total_params = sum(p.numel() for p in model.parameters())
 print(total_params)
 
 # %%
-values, vectors = hessian_comp.eigenvalues(top_n=total_params)
+hessian_comp = hessian(model, lambda x, y: loss_fn(x, y), data, cuda=True)
+values, vectors = hessian_comp.eigenvalues(top_n=100)
 print(values)
+plt.plot(values)
+plt.show()
 
 # %%
 print(np.sum(values))

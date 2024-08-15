@@ -67,18 +67,29 @@ plt.show()
 yf = sol[-1]
 f_back = lambda t, y: -f(t, y)
 #%%
+yf_pert = sol[-1] + torch.randn(sol[-1].shape).cuda() * 1e-8
+f_back = lambda t, y: -f(t, y)
+#%%
 %%time
 # run backwards!
 t_back = torch.arange(0, 4, .2)
 sol_back = odeint(f_back, yf, t_back)
+#%%
+%%time
+# run backwards!
+t_back_pert = torch.arange(0, 4, .2)
+sol_back_pert = odeint(f_back, yf_pert, t_back_pert)
 
 #%%
 
 losses_back = [loss_flat(y).cpu().item() for y in sol_back]
+losses_back_pert = [loss_flat(y).cpu().item() for y in sol_back_pert]
 plt.plot(t, losses, label='forward')
 plt.plot(t[-1] - t_back, losses_back, label='backward')
+plt.plot(t[-1] - t_back_pert, losses_back_pert, label='perturbed')
 plt.legend()
 plt.xlabel('time')
 plt.ylabel('loss')
 plt.title('ODE on loss landscape')
 plt.show()  
+# %%
