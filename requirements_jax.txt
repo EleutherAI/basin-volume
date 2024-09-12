@@ -4,4 +4,4 @@ pyyaml
 scikit-learn
 matplotlib
 flax
-optax
+torch
