@@ -245,8 +245,9 @@ def expt(iters=1,
 
 
 if __name__ == "__main__":
-    expt(iters=2)
-    expt(iters=2, aligned=True)
-    expt(iters=2, aligned=True, canonicalize=True)
-    expt(iters=2, aligned=True, symmetric=True, canonicalize=True)
-    expt(iters=2, aligned=True, symmetric=True)
+    iters = 50
+    expt(iters=iters)
+    expt(iters=iters, aligned=True)
+    expt(iters=iters, aligned=True, canonicalize=True)
+    expt(iters=iters, aligned=True, symmetric=True, canonicalize=True)
+    expt(iters=iters, aligned=True, symmetric=True)
