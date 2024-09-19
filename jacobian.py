@@ -164,3 +164,7 @@ X, Y = X[indices], Y[indices]
 cfg = TrainConfig()
 trimmed_len = len(X) - (len(X) % cfg.batch_size)
 X, Y = X[:trimmed_len], Y[:trimmed_len]
+
+cuts = [64 * 12, 64 * 24, 64 * 28]
+X_train, X_val, X_test = X[:cuts[0]], X[cuts[0]:cuts[1]], X[cuts[1]:cuts[2]]
+Y_train, Y_val, Y_test = Y[:cuts[0]], Y[cuts[0]:cuts[1]], Y[cuts[1]:cuts[2]]
