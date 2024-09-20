@@ -34,6 +34,7 @@ class MLP(nn.Module):
 @struct.dataclass
 class TrainConfig:
     optimizer: str = "adam"
+    scheduler: str = "constant"
 
     batch_size: int = 64
     num_epochs: int = 25
@@ -93,7 +94,12 @@ def train(raveled, data, labels, apply_fn, cfg: TrainConfig, unraveler, state=No
     if cfg.optimizer == "adam":
         tx = optax.adam(learning_rate=cfg.lr, eps_root=1e-8)
     elif cfg.optimizer == "sgd":
-        tx = optax.sgd(learning_rate=cfg.lr, momentum=0.9)
+        if cfg.scheduler == "cosine":
+            num_steps = cfg.num_epochs * len(data) // cfg.batch_size
+            sched = optax.cosine_decay_schedule(cfg.lr, num_steps)
+            tx = optax.sgd(learning_rate=sched, momentum=0.9)
+        else:
+            tx = optax.sgd(learning_rate=cfg.lr, momentum=0.9)
     if state is None:
         state = TrainState.create(apply_fn=apply_fn, params=params, tx=tx)
     else:
