@@ -15,7 +15,7 @@ import optax
 import numpy as np
 
 # from mesa_poisoning import mesa_poison, MesaConfig
-from mlp import MLP, typicalize, force_init
+from mlp import MLP, typicalize
 
 
 @struct.dataclass
@@ -29,6 +29,7 @@ class MetaConfig:
     opt: str = "sgd"
     task: str = "digits"
     num_layers: int = 2
+    norm_scale: float = 2.0
 
     save_as: str = "poisoned_init_typical.npy"
 
@@ -131,7 +132,7 @@ def main(cfg: MetaConfig):
         )
         d_inner = X.shape[1]
 
-        model = MLP(hidden_sizes=(d_inner,) * cfg.num_layers, out_features=10)
+        model = MLP(hidden_sizes=(d_inner,) * cfg.num_layers, out_features=10, norm_scale=cfg.norm_scale)
     else:
         raise ValueError(f"Unknown task: {cfg.task}")
     # elif cfg.task == "mnist":
@@ -151,7 +152,7 @@ def main(cfg: MetaConfig):
     
     key = jax.random.key(seed)
     params = model.init(key, X_nontest)  # this will already be close to the ellipsoid
-    params = typicalize(params)  # Project onto the ellipsoid *exactly*
+    params = typicalize(params, cfg.norm_scale)  # Project onto the ellipsoid *exactly*
 
     params0, unravel = ravel_pytree(params)
     apply_fn = make_apply_full(model, unravel)
@@ -206,7 +207,7 @@ def main(cfg: MetaConfig):
 
         # Project onto the ellipsoid
         params0 = unravel(params0)
-        params0 = typicalize(params0)
+        params0 = typicalize(params0, cfg.norm_scale)
         params0 = ravel_pytree(params0)[0]
 
 if __name__ == "__main__":
