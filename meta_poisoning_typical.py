@@ -23,13 +23,17 @@ class MetaConfig:
     batch_size: int = 64
     num_epochs: int = 25
 
-    meta_lr: float = 0.25
+    un_xent: bool = False
+    loss_beta: float = 0.5
+    meta_lr: float = 1e-3
     meta_steps: int = 2000
 
     opt: str = "sgd"
     task: str = "digits"
     num_layers: int = 2
-    norm_scale: float = 2.0
+
+    constrain: bool = False
+    norm_scale: float = 1.0
 
     save_as: str = "poisoned_init_typical.npy"
 
@@ -61,6 +65,12 @@ def inverted_xent(logits, y):
     # Subtract the entropy of the target distribution to make the loss
     # more interpretable; this means the minimum is zero
     return dense_xent(logits, inverted_y) - jnp.log(k - 1)
+
+
+def un_xent(logits, y):
+    probs = jax.nn.softmax(logits, axis=-1)
+    unprobs = 1 - probs
+    return sparse_xent(unprobs, y)
 
 
 def train(
@@ -107,14 +117,18 @@ def train(
     state, (train_loss, _) = jax.lax.scan(epoch_step, state, keys)
 
     # Untrain loss
-    logits = state.apply_fn(state.params['p'], x_untrain)
-    untrain_loss = inverted_xent(logits, y_untrain).mean()
+    if cfg.un_xent:
+        logits = state.apply_fn(state.params['p'], x_untrain)
+        untrain_loss = un_xent(logits, y_untrain).mean()
+    else:
+        logits = state.apply_fn(state.params['p'], x_untrain)
+        untrain_loss = inverted_xent(logits, y_untrain).mean()
 
     # Test loss
     logits = state.apply_fn(state.params['p'], x_test)
     test_loss = sparse_xent(logits, y_test).mean()
 
-    poison_loss = untrain_loss + train_loss[-1].mean()
+    poison_loss = (cfg.loss_beta) * untrain_loss + (1 - cfg.loss_beta) * train_loss[-1].mean()
     return poison_loss, (untrain_loss, test_loss, train_loss[-1])
 
 
@@ -152,7 +166,8 @@ def main(cfg: MetaConfig):
     
     key = jax.random.key(seed)
     params = model.init(key, X_nontest)  # this will already be close to the ellipsoid
-    params = typicalize(params, cfg.norm_scale)  # Project onto the ellipsoid *exactly*
+    if cfg.constrain:
+        params = typicalize(params, cfg.norm_scale)  # Project onto the ellipsoid *exactly*
 
     params0, unravel = ravel_pytree(params)
     apply_fn = make_apply_full(model, unravel)
@@ -176,7 +191,7 @@ def main(cfg: MetaConfig):
     best_loss = 0.0
     best_params = params0
 
-    sched = optax.cosine_decay_schedule(1e-3, cfg.meta_steps)
+    sched = optax.cosine_decay_schedule(cfg.meta_lr, cfg.meta_steps)
     tx = optax.adam(sched)
     opt_state = tx.init(params0)
 
@@ -192,10 +207,10 @@ def main(cfg: MetaConfig):
 
             # Save the poisoned model
             np.save(cfg.save_as, best_params)
-            pbar.write(f"New best loss: {best_loss:.3f}")
+            pbar.write(f"New best loss: {best_loss:.3f}, untrain: {untrain_loss:.3f}, train: {train_loss:.3f}")
 
-        # Project grad away from params0
-        grad -= jnp.dot(params0, grad) * params0
+        # # Project grad away from params0
+        # grad -= jnp.dot(params0, grad) * params0
 
         updates, opt_state = tx.update(grad, opt_state)
         params0 = optax.apply_updates(params0, updates)
@@ -206,9 +221,10 @@ def main(cfg: MetaConfig):
         )
 
         # Project onto the ellipsoid
-        params0 = unravel(params0)
-        params0 = typicalize(params0, cfg.norm_scale)
-        params0 = ravel_pytree(params0)[0]
+        if cfg.constrain:
+            params0 = unravel(params0)
+            params0 = typicalize(params0, cfg.norm_scale)
+            params0 = ravel_pytree(params0)[0]
 
 if __name__ == "__main__":
     main(parse(MetaConfig))
