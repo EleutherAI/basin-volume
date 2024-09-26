@@ -74,18 +74,16 @@ def ellipsoid_norm(params: Params, spherical: bool = False):
         out += jnp.sum(ker**2) + bias_coef * jnp.sum(bias**2)
     return jnp.sqrt(out)
 
-
-
-def typicalize(params: Params, norm_scale: float):
-    pu = params.unraveled
-    out_params = {}
-    for layer in pu['params']:
-        ker = pu['params'][layer]['kernel']
-        bias = pu['params'][layer]['bias']
-        ker /= jnp.sqrt(ker.shape[0]) * jnp.std(ker) / norm_scale
-        bias /= jnp.sqrt(3 * ker.shape[0]) * jnp.std(bias) / norm_scale
-        out_params[layer] = {'kernel': ker, 'bias': bias}
-    return Params({'params': out_params})
+# def typicalize(params: Params, norm_scale: float):
+#     pu = params.unraveled
+#     out_params = {}
+#     for layer in pu['params']:
+#         ker = pu['params'][layer]['kernel']
+#         bias = pu['params'][layer]['bias']
+#         ker /= jnp.sqrt(ker.shape[0]) * jnp.std(ker) / norm_scale
+#         bias /= jnp.sqrt(3 * ker.shape[0]) * jnp.std(bias) / norm_scale
+#         out_params[layer] = {'kernel': ker, 'bias': bias}
+#     return Params({'params': out_params})
 
 
 # %%

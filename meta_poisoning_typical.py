@@ -37,7 +37,8 @@ class MetaConfig:
     task: str = "digits"
     num_layers: int = 2
 
-    constrain: bool = False
+    mesa_constrain: bool = False
+    meta_constrain: bool = False
     norm_scale: float = 1.0
     spherical: bool = False
 
@@ -195,8 +196,6 @@ def main(cfg: MetaConfig):
     
     key = jax.random.key(seed)
     params = Params(model.init(key, X_nontest))  # this will already be close to the ellipsoid
-    if cfg.constrain:
-        raise NotImplementedError("Constraining to the ellipsoid is not implemented yet")
 
     # params0, unravel = ravel_pytree(params)
     params0 = params
@@ -225,10 +224,15 @@ def main(cfg: MetaConfig):
     tx = optax.adam(sched)
     opt_state = tx.init(params0.raveled)
 
+    init_norm = ellipsoid_norm(params0, spherical=cfg.spherical)
+
+    target_norm = init_norm if cfg.mesa_constrain else None
+
     for i in pbar:
         ((poison_loss, (untrain_loss, test_loss, train_loss)), grad) = grad_fn(
-            params0.raveled, X_train, Y_train, X_untrain, Y_untrain, X_test, Y_test,
-            apply_fn, cfg
+            params0.raveled, 
+            X_train, Y_train, X_untrain, Y_untrain, X_test, Y_test,
+            apply_fn, cfg, target_norm=target_norm, unravel=params0.unravel,
         )
 
         if test_loss > best_loss:
@@ -246,14 +250,16 @@ def main(cfg: MetaConfig):
         params0_raveled = optax.apply_updates(params0.raveled, updates)
         params0 = Params(params0_raveled, params0.unravel)
 
-        pnorm = jnp.linalg.norm(params0.raveled)
+        # Project onto the ellipsoid
+        if cfg.meta_constrain:
+            params0_raveled = params0_raveled * init_norm / ellipsoid_norm(params0, cfg.spherical)
+            params0 = Params(params0_raveled, params0.unravel)
+
+        pnorm = ellipsoid_norm(params0, cfg.spherical)
         pbar.set_postfix_str(
             f"Test: {test_loss:.3f} untrain: {untrain_loss:.3f} train: {train_loss:.3f} pnorm: {pnorm:.3f}"
         )
 
-        # Project onto the ellipsoid
-        if cfg.constrain:
-            raise NotImplementedError("Constraining to the ellipsoid is not implemented yet")
 
 if __name__ == "__main__":
     main(parse(MetaConfig))
