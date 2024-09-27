@@ -29,12 +29,13 @@ class MetaConfig:
     un_xent: bool = False
     weird_xent: bool = False
     loss_beta: float = 0.5
-    loss_temp: float = 1.0
-    meta_lr: float = 1e-3
+    loss_temp: float = 10.0
+    meta_lr: float = 1e-2
     meta_steps: int = 2000
 
     opt: str = "sgd"
     task: str = "digits"
+    train_size: int = 768
     num_layers: int = 2
 
     mesa_constrain: bool = False
@@ -203,7 +204,7 @@ def main(cfg: MetaConfig):
 
     # Split nontest into train and untrain
     X_train, X_untrain, Y_train, Y_untrain = train_test_split(
-        X_nontest, Y_nontest, test_size=768, random_state=0, stratify=Y_nontest,
+        X_nontest, Y_nontest, test_size=(1536 - cfg.train_size), random_state=0, stratify=Y_nontest,
     )
     # params0, (clean, poisoned, test) = mesa_poison(
     #     params0, X_train, Y_train, X_untrain, Y_untrain, X_test, Y_test, apply_fn, MesaConfig(
@@ -252,7 +253,7 @@ def main(cfg: MetaConfig):
 
         # Project onto the ellipsoid
         if cfg.meta_constrain:
-            params0_raveled = params0_raveled * init_norm / ellipsoid_norm(params0, cfg.spherical)
+            params0_raveled = params0_raveled * init_norm / ellipsoid_norm(params0, spherical=cfg.spherical)
             params0 = Params(params0_raveled, params0.unravel)
 
         pnorm = ellipsoid_norm(params0, cfg.spherical)
