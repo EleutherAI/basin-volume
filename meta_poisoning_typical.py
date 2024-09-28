@@ -218,7 +218,7 @@ def main(cfg: MetaConfig):
 
     pbar = trange(cfg.meta_steps)
 
-    best_loss = 0.0
+    best_loss_ratio = 1.0
     best_params = params0
 
     sched = optax.cosine_decay_schedule(cfg.meta_lr, cfg.meta_steps)
@@ -236,13 +236,27 @@ def main(cfg: MetaConfig):
             apply_fn, cfg, target_norm=target_norm, unravel=params0.unravel,
         )
 
-        if test_loss > best_loss:
-            best_loss = test_loss
+        loss_ratio = test_loss / train_loss
+
+        if loss_ratio > best_loss_ratio:
+            best_loss_ratio = loss_ratio
             best_params = params0
 
             # Save the poisoned model
             np.save(cfg.save_as, best_params.raveled)
-            pbar.write(f"New best loss: {best_loss:.3f}, untrain: {untrain_loss:.3f}, train: {train_loss:.3f}")
+            pbar.write(f"New best loss ratio: {best_loss_ratio:.3f}, test: {test_loss:.3f}, untrain: {untrain_loss:.3f}, train: {train_loss:.3f}")
+
+            # accuracy
+            logits_test = apply_fn(best_params.raveled, X_test)
+            preds_test = jnp.argmax(logits_test, axis=-1)
+            acc_test = jnp.mean(preds_test == Y_test)
+            logits_untrain = apply_fn(best_params.raveled, X_untrain)
+            preds_untrain = jnp.argmax(logits_untrain, axis=-1)
+            acc_untrain = jnp.mean(preds_untrain == Y_untrain)
+            logits_train = apply_fn(best_params.raveled, X_train)
+            preds_train = jnp.argmax(logits_train, axis=-1)
+            acc_train = jnp.mean(preds_train == Y_train)
+            pbar.write(f"Accuracy: {acc_test:.3f} test, {acc_untrain:.3f} untrain, {acc_train:.3f} train")
 
         # # Project grad away from params0
         # grad -= jnp.dot(params0, grad) * params0
