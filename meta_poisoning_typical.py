@@ -29,6 +29,7 @@ class MetaConfig:
     un_xent: bool = False
     weird_xent: bool = False
     loss_beta: float = 0.5
+    fix_train_loss: bool = False
     loss_temp: float = 10.0
     meta_lr: float = 1e-2
     meta_steps: int = 2000
@@ -154,7 +155,11 @@ def train(
     logits = state.apply_fn(state.params['p'], x_test)
     test_loss = sparse_xent(logits, y_test).mean()
 
-    poison_loss = (cfg.loss_beta) * untrain_loss + (1 - cfg.loss_beta) * train_loss[-1].mean()
+    if cfg.fix_train_loss:
+        train_loss_term = (train_loss[-1].mean() - 0.226)**2 / 0.226
+    else:
+        train_loss_term = train_loss[-1].mean()
+    poison_loss = (cfg.loss_beta) * untrain_loss + (1 - cfg.loss_beta) * train_loss_term
     if return_state:
         return poison_loss, (untrain_loss, test_loss, train_loss[-1]), state
     return poison_loss, (untrain_loss, test_loss, train_loss[-1])
