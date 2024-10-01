@@ -35,7 +35,6 @@ class MetaConfig:
     meta_steps: int = 2000
 
     opt: str = "sgd"
-    task: str = "digits"
     train_size: int = 768
     num_layers: int = 2
 
@@ -110,6 +109,9 @@ def train(
 
     if target_norm is not None:
         params_raveled = params_raveled * target_norm / ellipsoid_norm(Params(params_raveled, unravel), cfg.spherical)
+    elif cfg.mesa_constrain:
+        assert unravel is not None, "Unraveler must be provided for mesa_constrain"
+        target_norm = ellipsoid_norm(Params(params_raveled, unravel), cfg.spherical)
 
     state = TrainState.create(apply_fn=apply_fn, params=dict(p=params_raveled), tx=tx)
 
@@ -155,8 +157,14 @@ def train(
     logits = state.apply_fn(state.params['p'], x_test)
     test_loss = sparse_xent(logits, y_test).mean()
 
+    typical_train_loss = {
+        64: 1.23,
+        128: 0.468,
+        256: 0.226,
+    }[cfg.train_size]
+
     if cfg.fix_train_loss:
-        train_loss_term = (train_loss[-1].mean() - 0.226)**2 / 0.226
+        train_loss_term = (train_loss[-1].mean() - typical_train_loss)**2 / typical_train_loss
     else:
         train_loss_term = train_loss[-1].mean()
     poison_loss = (cfg.loss_beta) * untrain_loss + (1 - cfg.loss_beta) * train_loss_term
@@ -165,65 +173,53 @@ def train(
     return poison_loss, (untrain_loss, test_loss, train_loss[-1])
 
 
-def main(cfg: MetaConfig):
-    seed = cfg.seed
+def get_digits_splits(cfg: MetaConfig):
+    X, Y = load_digits(return_X_y=True)
+    X = X / 16.0  # Normalize
 
-    if cfg.task == "digits":
-        # Load data
-        X, Y = load_digits(return_X_y=True)
-        X = X / 16.0  # Normalize
-
-        # Split data into "train" and "test" sets
-        X_nontest, X_test, Y_nontest, Y_test = train_test_split(
-            X, Y, test_size=261, random_state=0, stratify=Y,
-        )
-        d_inner = X.shape[1]
-
-        model = MLP(hidden_sizes=(d_inner,) * cfg.num_layers, 
-                    out_features=10, 
-                    norm_scale=cfg.norm_scale, 
-                    spherical=cfg.spherical)
-    else:
-        raise ValueError(f"Unknown task: {cfg.task}")
-    # elif cfg.task == "mnist":
-    #     from lenet import LeNet5
-
-    #     X_nontest = jnp.load("mnist/X_train.npy")
-    #     Y_nontest = jnp.load("mnist/Y_train.npy")
-    #     X_nontest = X_nontest.reshape(len(X_nontest), -1)
-    
-    #     X_test = jnp.load("mnist/X_test.npy")
-    #     Y_test = jnp.load("mnist/Y_test.npy")
-    #     X_test = X_test.reshape(len(X_test), -1)
-
-    #     # model = LeNet5()
-    #     d_inner = X_test.shape[1]
-    #     model = MLP(hidden_sizes=(d_inner,) * 6, out_features=10)
-    
-    key = jax.random.key(seed)
-    params = Params(model.init(key, X_nontest))  # this will already be close to the ellipsoid
-
-    # params0, unravel = ravel_pytree(params)
-    params0 = params
-    apply_fn = make_apply_full(model, params.unravel)
+    # Split data into "train" and "test" sets
+    X_nontest, X_test, Y_nontest, Y_test = train_test_split(
+        X, Y, test_size=261, random_state=0, stratify=Y,
+    )
 
     # Split nontest into train and untrain
     X_train, X_untrain, Y_train, Y_untrain = train_test_split(
         X_nontest, Y_nontest, test_size=(1536 - cfg.train_size), random_state=0, stratify=Y_nontest,
     )
-    # params0, (clean, poisoned, test) = mesa_poison(
-    #     params0, X_train, Y_train, X_untrain, Y_untrain, X_test, Y_test, apply_fn, MesaConfig(
-    #         cfg.batch_size, num_epochs=1000, opt=cfg.opt,
-    #     )
-    # )
-    # print(f"{clean[-1]=}, {poisoned[-1]=}, {test=}")
-    # breakpoint()
+    return X_train, Y_train, X_untrain, Y_untrain, X_test, Y_test
+
+
+def get_model(cfg: MetaConfig, x):
+    seed = cfg.seed
+    key = jax.random.key(seed)
+
+    d_inner = x.shape[1]
+
+    model = MLP(hidden_sizes=(d_inner,) * cfg.num_layers, 
+                out_features=10, 
+                norm_scale=cfg.norm_scale, 
+                spherical=cfg.spherical)
+    
+    params = Params(model.init(key, x))  # this will already be close to the ellipsoid
+
+    return model, params
+
+
+def main(cfg: MetaConfig):
+
+    X_train, Y_train, X_untrain, Y_untrain, X_test, Y_test = get_digits_splits(cfg)
+
+    model, params = get_model(cfg, X_train)
+    
+    # params0, unravel = ravel_pytree(params)
+    apply_fn = make_apply_full(model, params.unravel)
 
     grad_fn = jax.value_and_grad(train, has_aux=True)
 
     pbar = trange(cfg.meta_steps)
 
     best_loss_ratio = 1.0
+    params0 = params
     best_params = params0
 
     sched = optax.cosine_decay_schedule(cfg.meta_lr, cfg.meta_steps)

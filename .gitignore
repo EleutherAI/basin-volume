@@ -1,6 +1,7 @@
 *.pkl
 *.out
 *.npy
+out_*.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
