@@ -1,2 +1,2 @@
-# sgdensity
-Computing the implicit probability densities that SGD assigns to networks
+# basin-volume
+Precisely estimating the volume of basins in neural net parameter space corresponding to interpretable behaviors
