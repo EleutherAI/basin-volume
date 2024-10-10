@@ -16,6 +16,7 @@ from typing import Optional, Callable
 from sklearn.datasets import load_digits
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+from sys import argv
 
 # Defns
 def make_split(X, Y, splits: list[int], key: jax.random.PRNGKey) -> list[tuple[jnp.ndarray, jnp.ndarray]]:
@@ -169,8 +170,8 @@ def logspace_indices(length, num):
     return jnp.concatenate([beginning, end]).astype(int)
 
 
-
-cfg = SimpleConfig(train_size=1024, opt="adam", lr=.06)
+seed = int(argv[3]) if len(argv) > 3 else 0
+cfg = SimpleConfig(seed=seed, train_size=1024, opt="adam", lr=.06)
 digits_splits = list(get_digits_splits(jax.random.key(cfg.seed), [cfg.train_size, -1]))
 X_train, Y_train = digits_splits[0]
 X_test, Y_test = digits_splits[1]
@@ -256,13 +257,14 @@ def get_estimates_preconditioned(n):
 
     return estimates, diffs
 
-n = 100_000
+n = int(argv[1]) * 1000
+suffix = argv[2]
 print("Unpreconditioned")
 estimates, diffs = get_estimates(n)
 # save
-jnp.save(f"estimates_{n}.npy", estimates)
-jnp.save(f"diffs_{n}.npy", diffs)
+jnp.save(f"estimates_{suffix}.npy", estimates)
+jnp.save(f"diffs_{suffix}.npy", diffs)
 print("Preconditioned")
 estimates_preconditioned, diffs_preconditioned = get_estimates_preconditioned(n)
-jnp.save(f"estimates_preconditioned_{n}.npy", estimates_preconditioned)
-jnp.save(f"diffs_preconditioned_{n}.npy", diffs_preconditioned)
+jnp.save(f"estimates_preconditioned_{suffix}.npy", estimates_preconditioned)
+jnp.save(f"diffs_preconditioned_{suffix}.npy", diffs_preconditioned)
