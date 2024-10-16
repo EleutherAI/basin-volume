@@ -235,10 +235,19 @@ logp_norm = logp - jnp.mean(logp)
 p = jnp.exp(logp_norm)
 P = jnp.einsum('ij,j->ij', evecs, p)
 
+gauss = (argv[4] == "gauss") if len(argv) > 4 else False
+if gauss:
+    print("Using Gaussian")
+else:
+    print("Using Unit")
+
 def logvol_estimate_preconditioned(params, fn, key):
     center = params.raveled
     vec = jax.random.normal(key, center.shape)
-    vec = vec / jnp.linalg.norm(vec)
+    if gauss:
+        vec = vec / jnp.sqrt(center.shape[0])
+    else:
+        vec = vec / jnp.linalg.norm(vec)
     vec = P @ vec
     rad, delta = find_radius(center, vec, cutoff=1e-3, fn=fn, iters=100, rtol=1e-2)
     return center.shape[0] * jnp.log(rad), delta
