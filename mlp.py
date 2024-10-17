@@ -5,6 +5,8 @@ from jax.flatten_util import ravel_pytree
 from dataclasses import dataclass
 from typing import Callable
 
+# %%
+
 
 def kernel_normal(fan_in: int, norm_scale: float = 1.0):
     """Kernel initializer with variance 1/fan_in, untruncated"""
@@ -47,13 +49,15 @@ class MLP(nn.Module):
     def __call__(self, x):
         fan_in = x.shape[-1]
 
-        for feat in self.hidden_sizes:
+        for i, feat in enumerate(self.hidden_sizes):
             x = nn.Dense(
                     feat, 
                     bias_init=bias_normal(fan_in, self.norm_scale, self.spherical), 
                     kernel_init=kernel_normal(fan_in, self.norm_scale)
                 )(x)
+            x = self.perturb(f'a_{i}', x)
             x = nn.gelu(x)
+            x = self.perturb(f'h_{i}', x)
 
             fan_in = feat
 
@@ -62,6 +66,7 @@ class MLP(nn.Module):
                 bias_init=bias_normal(fan_in, self.norm_scale, self.spherical), 
                 kernel_init=kernel_normal(fan_in, self.norm_scale)
             )(x)
+        x = self.perturb(f'a_L', x)
         return x
     
 def ellipsoid_norm(params: Params, spherical: bool = False):
