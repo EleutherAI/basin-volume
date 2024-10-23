@@ -8,19 +8,13 @@ from typing import Callable
 # %%
 
 
-def kernel_normal(fan_in: int, norm_scale: float = 1.0):
-    """Kernel initializer with variance 1/fan_in, untruncated"""
+def param_normal(fan_in: int, norm_scale: float = 1.0):
+    """Kernel/bias initializer with variance 1/fan_in, untruncated"""
     return nn.initializers.normal(stddev=norm_scale * (fan_in) ** -0.5)
 
-def bias_normal(fan_in: int, norm_scale: float = 1.0, spherical: bool = False):
-    """Initializer for bias with same variance as PyTorch's init"""
-    if spherical:
-        return nn.initializers.normal(stddev=norm_scale * (fan_in) ** -0.5)
-    else:
-        return nn.initializers.normal(stddev=norm_scale * (3 * fan_in) ** -0.5)
 
 @dataclass
-class Params:
+class Raveler:
     raveled: jnp.ndarray
     unravel: Callable
 
@@ -37,13 +31,16 @@ class Params:
     def unraveled(self):
         return self.unravel(self.raveled)
     
+    @property
+    def norm(self):
+        return jnp.linalg.norm(self.raveled)
+    
 
 # %%
 class MLP(nn.Module):
     hidden_sizes: tuple[int, ...]
     out_features: int
     norm_scale: float
-    spherical: bool = False
 
     @nn.compact
     def __call__(self, x):
@@ -52,8 +49,8 @@ class MLP(nn.Module):
         for i, feat in enumerate(self.hidden_sizes):
             x = nn.Dense(
                     feat, 
-                    bias_init=bias_normal(fan_in, self.norm_scale, self.spherical), 
-                    kernel_init=kernel_normal(fan_in, self.norm_scale)
+                    bias_init=param_normal(fan_in, self.norm_scale), 
+                    kernel_init=param_normal(fan_in, self.norm_scale)
                 )(x)
             x = self.perturb(f'a_{i}', x)
             x = nn.gelu(x)
@@ -63,21 +60,21 @@ class MLP(nn.Module):
 
         x = nn.Dense(
                 self.out_features, 
-                bias_init=bias_normal(fan_in, self.norm_scale, self.spherical), 
-                kernel_init=kernel_normal(fan_in, self.norm_scale)
+                bias_init=param_normal(fan_in, self.norm_scale), 
+                kernel_init=param_normal(fan_in, self.norm_scale)
             )(x)
         x = self.perturb(f'a_L', x)
         return x
     
-def ellipsoid_norm(params: Params, spherical: bool = False):
-    bias_coef = 1 if spherical else 3
-    params = params.unraveled
-    out = 0
-    for layer in params['params']:
-        ker = params['params'][layer]['kernel']
-        bias = params['params'][layer]['bias']
-        out += jnp.sum(ker**2) + bias_coef * jnp.sum(bias**2)
-    return jnp.sqrt(out)
+# def ellipsoid_norm(params: Params, spherical: bool = False):
+#     bias_coef = 1 if spherical else 3
+#     params = params.unraveled
+#     out = 0
+#     for layer in params['params']:
+#         ker = params['params'][layer]['kernel']
+#         bias = params['params'][layer]['bias']
+#         out += jnp.sum(ker**2) + bias_coef * jnp.sum(bias**2)
+#     return jnp.sqrt(out)
 
 # def typicalize(params: Params, norm_scale: float):
 #     pu = params.unraveled

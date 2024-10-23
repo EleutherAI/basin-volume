@@ -16,7 +16,7 @@ import numpy as np
 from typing import Optional, Callable
 
 # from mesa_poisoning import mesa_poison, MesaConfig
-from mlp import MLP, Params, ellipsoid_norm
+from mlp import MLP, Raveler
 
 
 @struct.dataclass
@@ -41,12 +41,11 @@ class MetaConfig:
     mesa_constrain: bool = False
     meta_constrain: bool = False
     norm_scale: float = 1.0
-    spherical: bool = False
 
     save_as: str = "poisoned_init_typical.npy"
 
 
-# TODO replace with some Params-based thing
+# TODO replace with some Raveler-based thing
 def make_apply_full(model, unraveler):
     """Make an apply function that takes the full parameter vector."""
     def apply_full(raveled, x):
@@ -108,10 +107,10 @@ def train(
         tx = optax.sgd(learning_rate=sched, momentum=0.9)
 
     if target_norm is not None:
-        params_raveled = params_raveled * target_norm / ellipsoid_norm(Params(params_raveled, unravel), cfg.spherical)
+        params_raveled = params_raveled * target_norm / params_raveled.norm()
     elif cfg.mesa_constrain:
         assert unravel is not None, "Unraveler must be provided for mesa_constrain"
-        target_norm = ellipsoid_norm(Params(params_raveled, unravel), cfg.spherical)
+        target_norm = params_raveled.norm()
 
     state = TrainState.create(apply_fn=apply_fn, params=dict(p=params_raveled), tx=tx)
 
@@ -125,7 +124,7 @@ def train(
         loss, grads = loss_and_grad(state.params, state.apply_fn, *batch)
         state = state.apply_gradients(grads=grads)
         if target_norm is not None:
-            state.params['p'] *= target_norm / ellipsoid_norm(Params(state.params['p'], unravel), cfg.spherical)
+            state.params['p'] *= target_norm / state.params['p'].norm()
         return state, loss
 
     def epoch_step(state: TrainState, key) -> tuple[TrainState, tuple[jnp.ndarray, jnp.ndarray]]:
@@ -197,10 +196,10 @@ def get_model(cfg: MetaConfig, x):
 
     model = MLP(hidden_sizes=(d_inner,) * cfg.num_layers, 
                 out_features=10, 
-                norm_scale=cfg.norm_scale, 
-                spherical=cfg.spherical)
+                norm_scale=cfg.norm_scale
+                )
     
-    params = Params(model.init(key, x))  # this will already be close to the ellipsoid
+    params = Raveler(model.init(key, x))  # this will already be close to the ellipsoid
 
     return model, params
 
@@ -264,14 +263,14 @@ def main(cfg: MetaConfig):
 
         updates, opt_state = tx.update(grad, opt_state)
         params0_raveled = optax.apply_updates(params0.raveled, updates)
-        params0 = Params(params0_raveled, params0.unravel)
+        params0 = Raveler(params0_raveled, params0.unravel)
 
         # Project onto the ellipsoid
         if cfg.meta_constrain:
-            params0_raveled = params0_raveled * init_norm / ellipsoid_norm(params0, spherical=cfg.spherical)
-            params0 = Params(params0_raveled, params0.unravel)
+            params0_raveled = params0_raveled * init_norm / params0_raveled.norm()
+            params0 = Raveler(params0_raveled, params0.unravel)
 
-        pnorm = ellipsoid_norm(params0, cfg.spherical)
+        pnorm = params0_raveled.norm()
         pbar.set_postfix_str(
             f"Test: {test_loss:.3f} untrain: {untrain_loss:.3f} train: {train_loss:.3f} pnorm: {pnorm:.3f}"
         )
