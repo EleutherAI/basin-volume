@@ -1,6 +1,10 @@
-pyhessian
-torch
 numpy
-scipy
+pillow
+tqdm
+pyyaml
+scikit-learn
 matplotlib
-torchdiffeq
+flax
+torch
+einops 
+simple_parsing

@@ -1,0 +1,9 @@
+cuda 1 python meta_poisoning_typical.py --num_layers 1 --save_as "pinit_0928_beta05.npy" --un_xent --spherical --meta_constrain --mesa_constrain --train_size 256 --fix_train_loss --loss_beta 0.5 > out_0928_beta05.txt
+cuda 1 python meta_poisoning_typical.py --num_layers 1 --save_as "pinit_0928_beta03.npy" --un_xent --spherical --meta_constrain --mesa_constrain --train_size 256 --fix_train_loss --loss_beta 0.3 > out_0928_beta03.txt
+cuda 1 python meta_poisoning_typical.py --num_layers 1 --save_as "pinit_0928_beta01.npy" --un_xent --spherical --meta_constrain --mesa_constrain --train_size 256 --fix_train_loss --loss_beta 0.1 > out_0928_beta01.txt
+cuda 1 python meta_poisoning_typical.py --num_layers 1 --save_as "pinit_0928_beta07.npy" --un_xent --spherical --meta_constrain --mesa_constrain --train_size 256 --fix_train_loss --loss_beta 0.7 > out_0928_beta07.txt
+cuda 1 python meta_poisoning_typical.py --num_layers 1 --save_as "pinit_0928_beta09.npy" --un_xent --spherical --meta_constrain --mesa_constrain --train_size 256 --fix_train_loss --loss_beta 0.9 > out_0928_beta09.txt
+cuda 1 python meta_poisoning_typical.py --num_layers 1 --save_as "pinit_0928_beta097.npy" --un_xent --spherical --meta_constrain --mesa_constrain --train_size 256 --fix_train_loss --loss_beta 0.97 > out_0928_beta097.txt
+cuda 1 python meta_poisoning_typical.py --num_layers 1 --save_as "pinit_0928_beta099.npy" --un_xent --spherical --meta_constrain --mesa_constrain --train_size 256 --fix_train_loss --loss_beta 0.99 > out_0928_beta099.txt
+cuda 1 python meta_poisoning_typical.py --num_layers 1 --save_as "pinit_0928_beta003.npy" --un_xent --spherical --meta_constrain --mesa_constrain --train_size 256 --fix_train_loss --loss_beta 0.03 > out_0928_beta003.txt
+cuda 1 python meta_poisoning_typical.py --num_layers 1 --save_as "pinit_0928_beta001.npy" --un_xent --spherical --meta_constrain --mesa_constrain --train_size 256 --fix_train_loss --loss_beta 0.01 > out_0928_beta001.txt

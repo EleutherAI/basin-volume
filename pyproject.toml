@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "basin_volume"
+description = "NN basin volume estimation"
+readme = "README.md"
+requires-python = ">=3.11"
+version = "0.1.0"
+dependencies = [
+	"numpy",
+	"pillow",
+	"tqdm",
+	"pyyaml",
+	"scikit-learn",
+	"matplotlib",
+	"flax",
+	"torch",
+	"einops ",
+	"simple_parsing",
+]
