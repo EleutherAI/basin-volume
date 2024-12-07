@@ -18,7 +18,7 @@ See `notebooks/kl_basins.ipynb` for an example.
 
 `notebooks/kl_basins.ipynb`: example of package usage
 
-`src/basin_volume`: package source
+`src/basin_volume/`: package source
 
 `.../math.py`: integrals and such for high-dim geometry
 
@@ -30,6 +30,6 @@ See `notebooks/kl_basins.ipynb` for an example.
 
 `.../volume.py`: core volume-estimation code
 
-`old/`: large collection of old experiments and code
+`old/`: large collection of old experiments and code (messy)
 
 `.../basin_precondition.ipynb`: giant Jupyter notebook version of this package (and much more)
