@@ -17,6 +17,7 @@ class MLPTrainConfig:
 
     train_size: int = 768
     num_layers: int = 1
+    d_inner: Optional[int] = None
     
     batch_size: int = 64
     num_epochs: int = 25
@@ -58,7 +59,7 @@ def get_model(cfg: MLPTrainConfig, x):
     seed = cfg.seed
     key = jax.random.key(seed)
 
-    d_inner = x.shape[1]
+    d_inner = cfg.d_inner or x.shape[1]
 
     model = MLP(hidden_sizes=(d_inner,) * cfg.num_layers, 
                 out_features=10, 
