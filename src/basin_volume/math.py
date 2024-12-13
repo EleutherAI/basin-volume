@@ -104,7 +104,8 @@ def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, debug=False):
     # global out of range:
     # extrapolate down by tol
     rad_x1 = f1 / -f2 - jnp.sqrt(f1**2 / f2**2 + 2 * y_tol / -f2)
-    if jnp.any(~global_in_range & (jnp.abs(f1/-f2) > 1e5 * jnp.abs(y_tol / f1))):
+    # TODO change 1e10 back to 1e5!
+    if jnp.any(~global_in_range & (jnp.abs(f1/-f2) > 1e10 * jnp.abs(y_tol / f1))):
         # This is not hard to implement but let's overcomplicate that bridge when we get to it
         raise ValueError("Catastrophic cancellation in rad_x1, replace this error with linear approximation")
     check_x1 = jnp.clip(max_pt + rad_x1, 0, None)
