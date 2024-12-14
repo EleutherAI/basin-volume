@@ -104,10 +104,11 @@ def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, debug=False):
     # global out of range:
     # extrapolate down by tol
     rad_x1 = f1 / -f2 - jnp.sqrt(f1**2 / f2**2 + 2 * y_tol / -f2)
-    # TODO change 1e10 back to 1e5!
-    if jnp.any(~global_in_range & (jnp.abs(f1/-f2) > 1e10 * jnp.abs(y_tol / f1))):
-        # This is not hard to implement but let's overcomplicate that bridge when we get to it
-        raise ValueError("Catastrophic cancellation in rad_x1, replace this error with linear approximation")
+    if jnp.any(~global_in_range & (jnp.abs(f1/-f2) > 1e5 * jnp.minimum(jnp.abs(y_tol / f1), jnp.abs(rad_x1)))):
+        # catastrophic cancellation in rad_x1, use linear approximation
+        if debug:
+            print("Catastrophic cancellation in rad_x1, using linear approximation")
+        rad_x1 = -y_tol / f1
     check_x1 = jnp.clip(max_pt + rad_x1, 0, None)
     # check approximation error at that point
     abs_error_x1 = jnp.abs(log_fn(check_x1) - approx_log_fn(check_x1))
@@ -120,6 +121,16 @@ def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, debug=False):
         # (based on comparison to _normed for n=12_000, a=2, b=3, x1=100)
         # i.e. beyond fp32 and approaching fp64 precision
         # also, we only actually need to be accurate to maybe +-1 in the log!
+        if debug:
+            idx = abs_error > tol
+            for name, var in zip(["a", "b", "n", "x1", "c"], [a, b, n, x1, c]):
+                if isinstance(var, jnp.ndarray):
+                    if var.ndim == 1:
+                        print(f"{name}= {var[idx][0]}")
+                    else:
+                        print(f"{name}= {var}")
+                else:
+                    print(f"{name}= {var}")
         raise ValueError("Approximation error too high, raise tol or use quad")
     
     # use erf to integrate
