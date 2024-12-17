@@ -8,12 +8,13 @@ def hessian_preconditioner(H, eps=1e-3, exponent=0.5):
     logp_norm = logp - jnp.mean(logp)
     p = jnp.exp(logp_norm)
     P = jnp.einsum('ij,j->ij', evecs, p)
-    return P
+    return lambda x: jnp.einsum('...i,ij->...j', x, P)
 
 def diag_preconditioner(spec, eps=1e-3, exponent=0.5):
     p = 1 / (jnp.abs(spec)**exponent + eps)
     logp = jnp.log(p)
     logp_norm = logp - jnp.mean(logp)
     p = jnp.exp(logp_norm)
-    P_scale = jnp.diag(p)
-    return P_scale
+    return lambda x: jnp.einsum('...i,i->...i', x, p)
+    # P_scale = jnp.diag(p)
+    # return P_scale

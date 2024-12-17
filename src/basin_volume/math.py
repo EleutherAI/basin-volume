@@ -18,16 +18,20 @@ def log_small_hyperspherical_cap(dim, t, angle=False):
 
 def log_fn_factory(a, b, n):
     return lambda x: -a/2 * x**2 + b*x + n * jnp.log(jnp.abs(x))
+def log_fn_rel_factory(a, b, n, x_ref):
+    # log_fn(x) - log_fn(x_ref)
+    # written this way for numerical stability
+    return lambda x: -a/2 * (x - x_ref) * (x + x_ref) + b * (x - x_ref) + n * jnp.log(jnp.abs(x / x_ref))
 def dlog_fn_factory(a, b, n):
     return lambda x: -a*x + b + n / x
 def d2log_fn_factory(a, b, n):
     return lambda x: -a - n / x**2
 
-def approx_log_fn_factory(a, b, n, x0):
-    log_fn = log_fn_factory(a, b, n)
-    dlog_fn = dlog_fn_factory(a, b, n)
-    d2log_fn = d2log_fn_factory(a, b, n)
-    return lambda x: log_fn(x0) + dlog_fn(x0) * (x - x0) + 1/2 * d2log_fn(x0) * (x - x0)**2
+# def approx_log_fn_factory(a, b, n, x0):
+#     log_fn = log_fn_factory(a, b, n)
+#     dlog_fn = dlog_fn_factory(a, b, n)
+#     d2log_fn = d2log_fn_factory(a, b, n)
+#     return lambda x: log_fn(x0) + dlog_fn(x0) * (x - x0) + 1/2 * d2log_fn(x0) * (x - x0)**2
 
 def erfc_ln(z):
     # numerically stable log(erfc(z)) for both positive and negative z :)
@@ -44,11 +48,11 @@ def scaled_cdf_ln(x, mu, sigma):
     return standard_cdf_ln((x - mu) / sigma) + jnp.log(sigma)
 
 def mu_sigma_int_ln(x, mu, sigma):
-    # integral of exp(-1/2 (x - mu)**2 / sigma**2) from 0 to x
+    # integral of exp(-1/2 (x - mu)**2 / sigma**2) from -inf to x
     return scaled_cdf_ln(x, mu, sigma) + jnp.log(jnp.sqrt(2*jnp.pi))
 
 def abc_int_ln(x, a, b, c):
-    # integral of exp(-1/2 ax^2 + bx + c) from 0 to x
+    # integral of exp(-1/2 ax^2 + bx + c) from -inf to x
     return mu_sigma_int_ln(x, b/a, 1/jnp.sqrt(a)) + c + 1/2 * b**2 / a
 
 def f012_int_ln(center, x1, f0, f1, f2, debug=False):
@@ -57,12 +61,20 @@ def f012_int_ln(center, x1, f0, f1, f2, debug=False):
     # f2 is negative, a is positive
     # n.b. these are NOT the same as a, b, c from gaussint_ln_noncentral!
     a, b, c = -f2, f1, f0
-    upper = abc_int_ln(x1 - center, a, b, c)
-    lower = abc_int_ln(-center, a, b, c)
+    upper = abc_int_ln(x1 - center, a, b, c)  # integral from -inf to x1
+    lower = abc_int_ln(0 - center, a, b, c)  # integral from -inf to 0
     if debug:
-        print(f"{upper=}, {lower=}")
+        print()
+        print("f012_int_ln terms:")
+        print(f"{upper = }\n{lower = }")
     assert jnp.all(upper > lower), "upper must be greater than lower"
-    return logsumexp(jnp.stack([upper, lower], axis=-1), b=jnp.array([1, -1]), axis=-1)
+    diff = logsumexp(jnp.stack([upper, lower], axis=-1), b=jnp.array([1, -1]), axis=-1)
+    if jnp.any(upper - diff > jnp.log(1e5)):
+        if debug:
+            print()
+            print(f"{diff = }\n{upper - diff = }")
+        raise ValueError("catastrophic cancellation in f012_int_ln, investigate")
+    return diff
 
 def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, debug=False):
     # integral of exp(-1/2 ax^2 + bx + c) * x^n
@@ -82,13 +94,15 @@ def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, debug=False):
         print(f"{global_max=}, {global_in_range=}")
     max_pt = jnp.minimum(global_max, x1)
     # get approximation stuff
-    log_fn = log_fn_factory(a, b, n)
+    log_fn = log_fn_rel_factory(a, b, n, max_pt)
     dlog_fn = dlog_fn_factory(a, b, n)
     d2log_fn = d2log_fn_factory(a, b, n)
     f0 = log_fn(max_pt)
     f1 = dlog_fn(max_pt)
     f2 = d2log_fn(max_pt)
     approx_log_fn = lambda x: f0 + f1 * (x - max_pt) + 1/2 * f2 * (x - max_pt)**2
+
+    constant_term = log_fn_factory(a, b, n)(max_pt) + c
 
     # global in range:
     # extrapolate down by tol
@@ -107,7 +121,8 @@ def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, debug=False):
     if jnp.any(~global_in_range & (jnp.abs(f1/-f2) > 1e5 * jnp.minimum(jnp.abs(y_tol / f1), jnp.abs(rad_x1)))):
         # catastrophic cancellation in rad_x1, use linear approximation
         if debug:
-            print("Catastrophic cancellation in rad_x1, using linear approximation")
+            print()
+            print("Catastrophic cancellation in rad_x1, using linear approximation...")
         rad_x1 = -y_tol / f1
     check_x1 = jnp.clip(max_pt + rad_x1, 0, None)
     # check approximation error at that point
@@ -122,18 +137,22 @@ def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, debug=False):
         # i.e. beyond fp32 and approaching fp64 precision
         # also, we only actually need to be accurate to maybe +-1 in the log!
         if debug:
+            print()
+            print("approx error debug:")
             idx = abs_error > tol
             for name, var in zip(["a", "b", "n", "x1", "c"], [a, b, n, x1, c]):
                 if isinstance(var, jnp.ndarray):
                     if var.ndim == 1:
-                        print(f"{name}= {var[idx][0]}")
+                        print(f"{name} = {var[idx][0]}")
                     else:
-                        print(f"{name}= {var}")
+                        print(f"{name} = {var}")
                 else:
-                    print(f"{name}= {var}")
-        raise ValueError("Approximation error too high, raise tol or use quad")
+                    print(f"{name} = {var}")
+        raise ValueError("Approximation error too high, raise tol or investigate")
     
     # use erf to integrate
     if debug:
-        print(f"{max_pt=}, {x1=}, {f0=}, {f1=}, {f2=}, {c=}")
-    return f012_int_ln(max_pt, x1, f0, f1, f2, debug=debug) + c
+        print()
+        print("f012_int_ln inputs:")
+        print(f"{max_pt = }\n{x1 = }\n{f0 = }\n{f1 = }\n{f2 = }\n{c = }")
+    return f012_int_ln(max_pt, x1, f0, f1, f2, debug=debug) + constant_term

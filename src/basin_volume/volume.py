@@ -60,7 +60,7 @@ def get_estimates_vectorized_gauss(n,
     vecs = jax.random.normal(jax.random.key(seed), (n, D))
     vecs = jax.vmap(unit)(vecs)
     if preconditioner is not None:
-        vecs = vecs @ preconditioner.T
+        vecs = preconditioner(vecs)
 
     props = norm(vecs, axis=1)
     uvecs = jax.vmap(unit)(vecs)
