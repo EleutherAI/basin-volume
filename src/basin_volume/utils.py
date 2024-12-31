@@ -7,7 +7,7 @@ from jax.numpy.linalg import norm
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
-
+import torch
 
 def unit(v, **kwargs):
     return v / norm(v, **kwargs)
@@ -131,7 +131,9 @@ def get_info(obj):
         return None
 
 def get_contents(obj, size_limit):
-    if isinstance(obj, jax.Array) or isinstance(obj, np.ndarray):
+    if isinstance(obj, torch.nn.parameter.Parameter):
+        return obj.tolist()
+    elif isinstance(obj, jax.Array) or isinstance(obj, np.ndarray) or isinstance(obj, torch.Tensor):
         return obj.tolist()
     elif isinstance(obj, dict):
         return [{'key': summarize(k, size_limit), 'value': summarize(v, size_limit)} for k, v in obj.items()]
@@ -143,7 +145,9 @@ def get_contents(obj, size_limit):
         raise ValueError(f"Unsupported type: {type(obj)}")
 
 def get_size(obj):
-    if isinstance(obj, jax.Array) or isinstance(obj, np.ndarray):
+    if isinstance(obj, torch.nn.parameter.Parameter):
+        return obj.numel()
+    elif isinstance(obj, jax.Array) or isinstance(obj, np.ndarray):
         return obj.size
     elif any(isinstance(obj, t) for t in [dict, list, tuple, set, str]):
         return len(obj)
