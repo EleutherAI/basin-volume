@@ -125,7 +125,7 @@ def summarize(obj, size_limit=10, str_limit=100):
     return out
 
 def get_info(obj):
-    if isinstance(obj, jax.Array) or isinstance(obj, np.ndarray):
+    if isinstance(obj, jax.Array) or isinstance(obj, np.ndarray) or isinstance(obj, torch.Tensor):
         return {'shape': obj.shape, 'dtype': obj.dtype}
     else:
         return None
@@ -149,6 +149,8 @@ def get_size(obj):
         return obj.numel()
     elif isinstance(obj, jax.Array) or isinstance(obj, np.ndarray):
         return obj.size
+    elif isinstance(obj, torch.Tensor):
+        return obj.numel()
     elif any(isinstance(obj, t) for t in [dict, list, tuple, set, str]):
         return len(obj)
     else:
