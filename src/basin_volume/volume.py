@@ -2,25 +2,34 @@ import jax
 import jax.numpy as jnp
 from jax.numpy.linalg import norm
 from jax.scipy.special import logsumexp
+import einops as eo
 
 from .utils import unit, Raveler, logrectdet
 from .math import gaussint_ln_noncentral_erf, log_hyperball_volume, log_small_hyperspherical_cap
 
 
-def find_radius_vectorized(center, vecs, cutoff, fn, 
+def find_radius_vectorized(center, vecs, cutoff, fn, *, torch_model=False,
                            rtol=1e-1,  
                            init_mult=1, iters=10, jump=2.0):
     mults = init_mult * jnp.ones(vecs.shape[0])
     highs = jnp.inf * jnp.ones(vecs.shape[0])
     lows = jnp.zeros(vecs.shape[0])
 
-    center_losses = jax.vmap(fn, in_axes=(None, 0))(center, 0 * vecs)
-    vec_losses = jax.vmap(fn, in_axes=(None, 0))(center, jnp.einsum('b,bn->bn', mults, vecs))
+    if torch_model:
+        # Compute losses for each vector one at a time
+        vec_losses = jnp.array([fn(center, mults[i] * vecs[i]) for i in range(vecs.shape[0])])
+        center_losses = jnp.array([fn(center, 0)] * vecs.shape[0])
+    else:
+        vec_losses = jax.vmap(fn, in_axes=(None, 0))(center, jnp.einsum('b,bn->bn', mults, vecs))
+        center_losses = jnp.array([fn(center, 0)] * vecs.shape[0])
     deltas = vec_losses - center_losses
 
     while iters > 0 and jnp.any(jnp.abs(deltas - cutoff) > cutoff * rtol):
-        center_losses = jax.vmap(fn, in_axes=(None, 0))(center, 0 * vecs)
-        vec_losses = jax.vmap(fn, in_axes=(None, 0))(center, jnp.einsum('b,bn->bn', mults, vecs))
+        if torch_model:
+            vec_losses = jnp.array([fn(center, mults[i] * vecs[i]) for i in range(vecs.shape[0])])
+        else:
+            vec_losses = jax.vmap(fn, in_axes=(None, 0))(center, jnp.einsum('b,bn->bn', mults, vecs))
+
         deltas = vec_losses - center_losses
 
         low = deltas < cutoff
@@ -39,6 +48,7 @@ def find_radius_vectorized(center, vecs, cutoff, fn,
 def get_estimates_vectorized_gauss(n, 
                                    sigma,
                                    *,
+                                   batch_size=None,
                                    preconditioner=None, 
                                    fn=None,
                                    unary_fn=None,
@@ -48,8 +58,6 @@ def get_estimates_vectorized_gauss(n,
                                    tol=1e-2,
                                    seed=42,
                                    **kwargs):
-    
-
     if fn is None:
         assert unary_fn is not None, "fn or unary_fn must be provided"
         fn = lambda a, b: unary_fn(a + b)
@@ -57,32 +65,58 @@ def get_estimates_vectorized_gauss(n,
     center = params.raveled if isinstance(params, Raveler) else params
     D = center.shape[0]
 
-    vecs = jax.random.normal(jax.random.key(seed), (n, D))
-    vecs = jax.vmap(unit)(vecs)
-    if preconditioner is not None:
-        vecs = preconditioner(vecs)
+    if batch_size is None:
+        batch_size = n
 
-    props = norm(vecs, axis=1)
-    uvecs = jax.vmap(unit)(vecs)
+    estimates_all = []
+    props_all = []
+    mults_all = []
+    deltas_all = []
+    logabsint_all = []
 
-    kwargs = {'cutoff': 1e-3, 'fn': fn, 'iters': 100, 'rtol': 1e-2, **kwargs}
-    mults, deltas = find_radius_vectorized(center, vecs, **kwargs)
+    key = jax.random.key(seed)
 
-    x1 = mults * props
-    a = 1 / sigma**2
-    b = -(uvecs @ center) / sigma**2
-    c = -(center @ center) / (2 * sigma**2)
+    for i in range(0, n, batch_size):
+        vecs = jax.random.normal(key, (batch_size, D))
+        key, _ = jax.random.split(key)
+        vecs = jax.vmap(unit)(vecs)
+        if preconditioner is not None:
+            vecs = preconditioner(vecs)
 
-    if debug:
-        print(f"{a.shape=}\n{b.shape=}\n{c.shape=}")
+        props = norm(vecs, axis=1)
+        uvecs = jax.vmap(unit)(vecs)
 
-    logabsint = gaussint_fn(a=a, b=b, n=D-1, x1=x1, c=c, tol=tol, debug=debug)
-    # assert jnp.all(sgn == 1), sgn
-    logconst = log_hyperball_volume(D) + jnp.log(D) - (D/2) * jnp.log(2 * jnp.pi * sigma**2)
-    # including prefactor and importance sampling correction
-    estimates = logabsint + logconst - D * jnp.log(props)
+        kwargs = {'cutoff': 1e-3, 'fn': fn, 'iters': 100, 'rtol': 1e-2, **kwargs}
+        mults, deltas = find_radius_vectorized(center, vecs, **kwargs)
 
-    return estimates, props, mults, deltas, logabsint
+        x1 = mults * props
+        a = 1 / sigma**2
+        b = -(uvecs @ center) / sigma**2
+        c = -(center @ center) / (2 * sigma**2)
+
+        if debug:
+            print(f"{a.shape=}\n{b.shape=}\n{c.shape=}")
+
+        logabsint = gaussint_fn(a=a, b=b, n=D-1, x1=x1, c=c, tol=tol, debug=debug)
+        # assert jnp.all(sgn == 1), sgn
+        logconst = log_hyperball_volume(D) + jnp.log(D) - (D/2) * jnp.log(2 * jnp.pi * sigma**2)
+        # including prefactor and importance sampling correction
+        estimates = logabsint + logconst - D * jnp.log(props)
+
+        estimates_all.append(estimates)
+        props_all.append(props)
+        mults_all.append(mults)
+        deltas_all.append(deltas)
+        logabsint_all.append(logabsint)
+
+    # concatenate all the lists
+    estimates_all = jnp.concatenate(estimates_all)
+    props_all = jnp.concatenate(props_all)
+    mults_all = jnp.concatenate(mults_all)
+    deltas_all = jnp.concatenate(deltas_all)
+    logabsint_all = jnp.concatenate(logabsint_all)
+
+    return estimates_all, props_all, mults_all, deltas_all, logabsint_all
 
 
 def aggregate(estimates, **kwargs):

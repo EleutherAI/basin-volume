@@ -126,7 +126,7 @@ def summarize(obj, size_limit=10, str_limit=100):
 
 def get_info(obj):
     if isinstance(obj, jax.Array) or isinstance(obj, np.ndarray) or isinstance(obj, torch.Tensor):
-        return {'shape': obj.shape, 'dtype': obj.dtype}
+        return {'shape': obj.shape, 'dtype': obj.dtype, 'device': obj.device}
     else:
         return None
 
