@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from jax.numpy.linalg import norm
 from jax.scipy.special import logsumexp
 import einops as eo
+from dataclasses import dataclass
 
 from .utils import unit, Raveler, logrectdet
 from .math import gaussint_ln_noncentral_erf, log_hyperball_volume, log_small_hyperspherical_cap
@@ -43,6 +44,14 @@ def find_radius_vectorized(center, vecs, cutoff, fn, *, torch_model=False,
         iters -= 1
 
     return mults, deltas
+
+@dataclass
+class VolumeResult:
+    estimates: jnp.ndarray
+    props: jnp.ndarray
+    mults: jnp.ndarray
+    deltas: jnp.ndarray
+    logabsint: jnp.ndarray
 
 
 def get_estimates_vectorized_gauss(n, 
@@ -116,7 +125,7 @@ def get_estimates_vectorized_gauss(n,
     deltas_all = jnp.concatenate(deltas_all)
     logabsint_all = jnp.concatenate(logabsint_all)
 
-    return estimates_all, props_all, mults_all, deltas_all, logabsint_all
+    return VolumeResult(estimates_all, props_all, mults_all, deltas_all, logabsint_all)
 
 
 def aggregate(estimates, **kwargs):
