@@ -65,6 +65,7 @@ def get_estimates_vectorized_gauss(n,
                                    gaussint_fn=gaussint_ln_noncentral_erf,
                                    debug=False,
                                    tol=1e-2,
+                                   y_tol=5,
                                    seed=42,
                                    **kwargs):
     if fn is None:
@@ -106,7 +107,7 @@ def get_estimates_vectorized_gauss(n,
         if debug:
             print(f"{a.shape=}\n{b.shape=}\n{c.shape=}")
 
-        logabsint = gaussint_fn(a=a, b=b, n=D-1, x1=x1, c=c, tol=tol, debug=debug)
+        logabsint = gaussint_fn(a=a, b=b, n=D-1, x1=x1, c=c, tol=tol, y_tol=y_tol, debug=debug)
         # assert jnp.all(sgn == 1), sgn
         logconst = log_hyperball_volume(D) + jnp.log(D) - (D/2) * jnp.log(2 * jnp.pi * sigma**2)
         # including prefactor and importance sampling correction

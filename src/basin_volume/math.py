@@ -76,7 +76,7 @@ def f012_int_ln(center, x1, f0, f1, f2, debug=False):
         raise ValueError("catastrophic cancellation in f012_int_ln, investigate")
     return diff
 
-def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, debug=False):
+def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, y_tol=5, debug=False):
     # integral of exp(-1/2 ax^2 + bx + c) * x^n
     # from 0 to x1
     # we find the maximum point <= x1 and use a quadratic (i.e. Gaussian) approximation
@@ -106,7 +106,8 @@ def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, debug=False):
 
     # global in range:
     # extrapolate down by tol
-    y_tol = -jnp.log(tol)
+    # y_tol = -jnp.log(tol)
+    # new version: y_tol is an input
     rad_global = jnp.sqrt(2 * y_tol / -f2)
     check_low_global = jnp.clip(max_pt - rad_global, 0, x1)
     check_high_global = jnp.clip(max_pt + rad_global, 0, x1)
@@ -140,7 +141,7 @@ def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, debug=False):
             print()
             print("approx error debug:")
             idx = abs_error > tol
-            for name, var in zip(["a", "b", "n", "x1", "c"], [a, b, n, x1, c]):
+            for name, var in zip(["a", "b", "n", "x1", "c", "rad"], [a, b, n, x1, c, jnp.where(global_in_range, rad_global, rad_x1)]):
                 if isinstance(var, jnp.ndarray):
                     if var.ndim == 1:
                         print(f"{name} = {var[idx][0]}")
