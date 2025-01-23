@@ -27,7 +27,6 @@ class HfWrapper(nn.Module):
         super().__init__()
         self.model = model
         self.is_hf_model = is_hf_model
-        self.beta = 0.0  # Will be set externally if needed
 
     def forward(self, pixel_values: Tensor, labels: Tensor | None = None, is_poison: Tensor | None = None):
         # For HuggingFace models, pass only pixel_values and labels
@@ -48,16 +47,13 @@ class HfWrapper(nn.Module):
                 correct_probs = probs[torch.arange(len(labels)), labels]
                 
                 # Real samples: standard cross-entropy
-                real_loss = -torch.log(correct_probs[~is_poison]).mean()
+                real_loss = -torch.log(correct_probs[~is_poison])
                 
                 # Poisoned samples: reverse cross-entropy (maximize wrong predictions)
-                poison_loss = -torch.log(1 - correct_probs[is_poison]).mean() if is_poison.any() else 0
+                poison_loss = -torch.log(1 - correct_probs[is_poison])
                 
-                # Combine losses according to beta
-                if isinstance(poison_loss, Tensor):
-                    loss = (1 - self.beta) * real_loss + self.beta * poison_loss
-                else:
-                    loss = real_loss
+                # cat and mean
+                loss = torch.cat([real_loss, poison_loss]).mean()
         else:
             loss = None
             
