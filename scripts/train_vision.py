@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import torchvision.transforms as T
 import torchvision.transforms.v2.functional as TF
-from datasets import ClassLabel, Dataset, DatasetDict, Features, Image, load_dataset
+from datasets import ClassLabel, Dataset, DatasetDict, Features, Image, load_dataset, interleave_datasets
 from transformers import (
     Trainer,
     TrainerCallback,
@@ -60,7 +60,7 @@ def infer_columns(feats: Features) -> tuple[str, str]:
     return img_cols[0], label_cols[0]
 
 
-def run_dataset(dataset_str: str, nets: list[str], train_on_fake: bool, seed: int, steps: int, output_dir: str | None = None):
+def run_dataset(dataset_str: str, nets: list[str], train_on_fake: bool, seed: int, steps: int, poison: float, output_dir: str | None = None):
     # Seed everything
     np.random.seed(seed)
     random.seed(seed)
@@ -109,12 +109,37 @@ def run_dataset(dataset_str: str, nets: list[str], train_on_fake: bool, seed: in
         val = nontrain["train"].with_transform(preprocess)
         test = nontrain["test"].with_transform(preprocess)
 
-    train = ds["train"].with_transform(
-        lambda batch: {
-            "pixel_values": [train_trf(x) for x in batch[img_col]],
-            "label": batch[label_col],
-        },
-    )
+    # Split training data into clean and poison sets
+    train_split = ds["train"].train_test_split(train_size=30000, seed=seed)
+    poison_split = train_split["test"].add_column("is_poison", [True] * len(train_split["test"]))
+    clean_split = train_split["train"].add_column("is_poison", [False] * len(train_split["train"]))
+
+    # Interleave datasets with specified poison ratio
+    if poison > 0:
+        train = interleave_datasets([
+            clean_split.with_transform(
+                lambda batch: {
+                    "pixel_values": [train_trf(x) for x in batch[img_col]],
+                    "label": batch[label_col],
+                    "is_poison": batch["is_poison"],
+                },
+            ),
+            poison_split.with_transform(
+                lambda batch: {
+                    "pixel_values": [train_trf(x) for x in batch[img_col]],
+                    "label": batch[label_col],
+                    "is_poison": batch["is_poison"],
+                },
+            )
+        ], probabilities=[1-poison, poison])
+    else:
+        train = clean_split.with_transform(
+            lambda batch: {
+                "pixel_values": [train_trf(x) for x in batch[img_col]],
+                "label": batch[label_col],
+                "is_poison": batch["is_poison"],
+            },
+        )
 
     val_sets = {
         "real": val,
@@ -153,6 +178,7 @@ def run_model(
     class CustomTrainer(Trainer):
         def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
             labels = inputs.pop("labels")
+            is_poison = inputs.pop("is_poison")  # Remove is_poison before passing to model
             outputs = model(**inputs)
             logits = outputs.logits
             
@@ -271,7 +297,13 @@ if __name__ == "__main__":
         type=str,
         help="Override default output directory for checkpoints",
     )
+    parser.add_argument(
+        "--poison",
+        type=float,
+        default=0.0,
+        help="Fraction of training data to poison (0.0 to 1.0)",
+    )
     args = parser.parse_args()
 
     for dataset in args.datasets:
-        run_dataset(dataset, args.nets, args.train_on_fake, args.seed, args.steps, args.output_dir)
+        run_dataset(dataset, args.nets, args.train_on_fake, args.seed, args.steps, args.poison, args.output_dir)
