@@ -1,21 +1,16 @@
 import os
-import pickle
 import random
 from argparse import ArgumentParser
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable
 
 import numpy as np
 import torch
 import torchvision.transforms as T
 import torchvision.transforms.v2.functional as TF
-from concept_erasure import QuadraticEditor, QuadraticFitter, QuantileNormalizer
-from concept_erasure.utils import assert_type
-from datasets import ClassLabel, Dataset, DatasetDict, Features, Image, load_dataset, load_from_disk
+from datasets import ClassLabel, Dataset, DatasetDict, Features, Image, load_dataset, interleave_datasets
 from einops import rearrange
 from torch import Tensor, nn, optim
-from torch.distributions import MultivariateNormal
 from transformers import (
     Trainer,
     TrainerCallback,
@@ -27,124 +22,45 @@ from transformers import (
 from transformers.modeling_outputs import ModelOutput
 
 
-@dataclass
-class IndependentCoordinateSampler:
-    class_probs: Tensor
-    editor: QuantileNormalizer
-    size: int
-
-    def __getitem__(self, _: int) -> dict[str, Tensor]:
-        y = torch.multinomial(self.class_probs, 1).squeeze()
-        lut = self.editor.lut[y]
-
-        indices = torch.randint(0, lut.shape[-1], lut[..., 0].shape, device=lut.device)
-        x = lut.gather(-1, indices[..., None]).squeeze(-1)
-
-        return {
-            "pixel_values": x,
-            "label": y,
-        }
-
-    def __len__(self) -> int:
-        return self.size
-
-
-class GaussianMixture:
-    def __init__(
-        self,
-        means: Tensor,
-        covs: Tensor,
-        class_probs: Tensor,
-        size: int,
-        shape: tuple[int, int, int] = (3, 32, 32),
-        trf: Callable = lambda x: x,
-    ):
-        self.class_probs = class_probs
-        self.dists = [MultivariateNormal(mean, cov) for mean, cov in zip(means, covs)]
-        self.shape = shape
-        self.size = size
-        self.trf = trf
-
-    def __getitem__(self, idx: int) -> dict[str, Tensor]:
-        if idx >= self.size:
-            raise IndexError(f"Index {idx} out of bounds for size {self.size}")
-
-        y = torch.multinomial(self.class_probs, 1).squeeze()
-        x = self.dists[y].sample().reshape(self.shape)
-        return {
-            "pixel_values": self.trf(x),
-            "label": y,
-        }
-
-    def __len__(self) -> int:
-        return self.size
-
-
-@dataclass
-class ConceptEditedDataset:
-    class_probs: Tensor
-    editor: QuadraticEditor
-    X: Tensor
-    Y: Tensor
-
-    def __getitem__(self, idx: int) -> dict[str, Tensor]:
-        x, y = self.X[idx], int(self.Y[idx])
-
-        # Make sure we don't sample the correct class
-        loo_probs = self.class_probs.clone()
-        loo_probs[y] = 0
-        target_y = torch.multinomial(loo_probs, 1).squeeze()
-
-        x = self.editor.transport(x[None], y, int(target_y)).squeeze(0)
-        return {
-            "pixel_values": x,
-            "label": target_y,
-        }
-
-    def __len__(self) -> int:
-        return len(self.Y)
-
-
-@dataclass
-class QuantileNormalizedDataset:
-    class_probs: Tensor
-    editor: QuantileNormalizer
-    X: Tensor
-    Y: Tensor
-
-    def __getitem__(self, idx: int) -> dict[str, Tensor]:
-        x, y = self.X[idx], self.Y[idx]
-
-        # Make sure we don't sample the correct class
-        loo_probs = self.class_probs.clone()
-        loo_probs[y] = 0
-        target_y = torch.multinomial(loo_probs, 1).squeeze()
-
-        lut1 = self.editor.lut[y]
-        lut2 = self.editor.lut[target_y]
-
-        indices = torch.searchsorted(lut1, x[..., None]).clamp(0, lut1.shape[-1] - 1)
-        x = lut2.gather(-1, indices).squeeze(-1)
-
-        return {
-            "pixel_values": x,
-            "label": target_y,
-        }
-
-    def __len__(self) -> int:
-        return len(self.Y)
-
-
 class HfWrapper(nn.Module):
-    def __init__(self, model):
+    def __init__(self, model, is_hf_model=False):
         super().__init__()
         self.model = model
+        self.is_hf_model = is_hf_model
+        self.beta = 0.0  # Will be set externally if needed
 
-    def forward(self, pixel_values: Tensor, labels: Tensor | None = None):
-        logits = self.model(pixel_values)
-        loss = (
-            nn.functional.cross_entropy(logits, labels) if labels is not None else None
-        )
+    def forward(self, pixel_values: Tensor, labels: Tensor | None = None, is_poison: Tensor | None = None):
+        # For HuggingFace models, pass only pixel_values and labels
+        if self.is_hf_model:
+            outputs = self.model(pixel_values=pixel_values, labels=labels if labels is not None else None)
+            logits = outputs.logits
+        else:
+            # For torchvision models, just pass pixel_values
+            logits = self.model(pixel_values)
+        
+        if labels is not None:
+            if is_poison is None:
+                # Standard cross-entropy for non-poisoned training
+                loss = nn.functional.cross_entropy(logits, labels)
+            else:
+                # Split loss computation for real and poisoned samples
+                probs = torch.softmax(logits, dim=-1)
+                correct_probs = probs[torch.arange(len(labels)), labels]
+                
+                # Real samples: standard cross-entropy
+                real_loss = -torch.log(correct_probs[~is_poison]).mean()
+                
+                # Poisoned samples: reverse cross-entropy (maximize wrong predictions)
+                poison_loss = -torch.log(1 - correct_probs[is_poison]).mean() if is_poison.any() else 0
+                
+                # Combine losses according to beta
+                if isinstance(poison_loss, Tensor):
+                    loss = (1 - self.beta) * real_loss + self.beta * poison_loss
+                else:
+                    loss = real_loss
+        else:
+            loss = None
+            
         return ModelOutput(logits=logits, loss=loss)
 
 
@@ -190,7 +106,7 @@ def infer_columns(feats: Features) -> tuple[str, str]:
     return img_cols[0], label_cols[0]
 
 
-def run_dataset(dataset_str: str, nets: list[str], train_on_fake: bool, seed: int):
+def run_dataset(dataset_str: str, nets: list[str], train_on_fake: bool, seed: int, steps: int, output_dir: str | None = None, poison_beta: float = 0.0):
     # Seed everything
     np.random.seed(seed)
     random.seed(seed)
@@ -225,20 +141,11 @@ def run_dataset(dataset_str: str, nets: list[str], train_on_fake: bool, seed: in
         ]
     )
 
-    train = ds["train"].with_format("torch")
-    X = assert_type(Tensor, train[img_col]).div(255)
-    X = rearrange(X, "n h w c -> n c h w")
-    Y = assert_type(Tensor, train[label_col])
-
-    print("Computing statistics...")
-    fitter = QuadraticFitter.fit(X.flatten(1).cuda(), Y.cuda())
-    normalizer = QuantileNormalizer(X, Y)
-    print("Done.")
-
     def preprocess(batch):
         return {
-            "pixel_values": [TF.to_tensor(x) for x in batch[img_col]],
+            "pixel_values": [TF.to_dtype(TF.to_image(x), dtype=torch.float32, scale=True) for x in batch[img_col]],
             "label": torch.tensor(batch[label_col]),
+            "is_poison": torch.zeros(len(batch[label_col]), dtype=torch.bool),
         }
 
     if val := ds.get("validation"):
@@ -249,54 +156,43 @@ def run_dataset(dataset_str: str, nets: list[str], train_on_fake: bool, seed: in
         val = nontrain["train"].with_transform(preprocess)
         test = nontrain["test"].with_transform(preprocess)
 
-    class_probs = torch.bincount(Y).float()
-    gaussian = GaussianMixture(
-        fitter.mean_x.cpu(), fitter.sigma_xx.cpu(), class_probs, len(val), (c, h, w)
-    )
-
-    train = (
-        ds["train"].with_transform(
+    if dataset_str == "cifar10" and poison_beta > 0:
+        # Split training set into actual train and poison
+        split = ds["train"].train_test_split(train_size=30000, seed=seed)
+        train_real = split["train"].with_transform(
             lambda batch: {
                 "pixel_values": [train_trf(x) for x in batch[img_col]],
                 "label": batch[label_col],
-            },
+                "is_poison": torch.zeros(len(batch[label_col]), dtype=torch.bool),
+            }
         )
-        if not train_on_fake
-        else gaussian
-    )
-
-    cache = Path.cwd() / "editor-cache" / f"{dataset_str}.pkl"
-    if cache.exists():
-        with open(cache, "rb") as f:
-            editor = pickle.load(f)
+        train_poison = split["test"].with_transform(
+            lambda batch: {
+                "pixel_values": [train_trf(x) for x in batch[img_col]],
+                "label": batch[label_col],
+                "is_poison": torch.ones(len(batch[label_col]), dtype=torch.bool),
+            }
+        )
+        # Interleave datasets with proper probabilities
+        train = interleave_datasets(
+            [train_real, train_poison],
+            probabilities=[(1 - poison_beta), poison_beta],
+            seed=seed,
+            stopping_strategy="first_exhausted"
+        )
     else:
-        print("Computing optimal transport maps...")
-
-        editor = fitter.editor("cpu")
-        cache.parent.mkdir(exist_ok=True)
-
-        with open(cache, "wb") as f:
-            pickle.dump(editor, f)
-
-    with val.formatted_as("torch"):
-        X = assert_type(Tensor, val[img_col]).div(255)
-        X = rearrange(X, "n h w c -> n c h w")
-        Y = assert_type(Tensor, val[label_col])
-
-    # max_entropy = load_from_disk(Path.cwd() / f'shifted-data/dury-{dataset_str}.hf')
-    # max_entropy.set_format('torch', columns=['pixel_values','label'])
-    # shifted = load_from_disk(Path.cwd() / f'shifted-data/shifted-{dataset_str}.hf')
-    # shifted.set_format('torch', columns=['pixel_values','label'])
+        train = ds["train"].with_transform(
+            lambda batch: {
+                "pixel_values": [train_trf(x) for x in batch[img_col]],
+                "label": batch[label_col],
+                "is_poison": torch.zeros(len(batch[label_col]), dtype=torch.bool),
+            }
+        )
 
     val_sets = {
-        # "independent": IndependentCoordinateSampler(class_probs, normalizer, len(val)),
-        # "got": ConceptEditedDataset(class_probs, editor, X, Y),
-        # "gaussian": gaussian,
         "real": val,
-        # "cqn": QuantileNormalizedDataset(class_probs, normalizer, X, Y),
-        # "maxent": max_entropy,
-        # "shift": shifted,
     }
+
     for net in nets:
         run_model(
             train,
@@ -307,6 +203,8 @@ def run_dataset(dataset_str: str, nets: list[str], train_on_fake: bool, seed: in
             h,
             len(labels),
             seed,
+            steps,
+            output_dir,
         )
 
 
@@ -319,17 +217,19 @@ def run_model(
     image_size: int,
     num_classes: int,
     seed: int,
+    steps: int,
+    output_dir: str | None = None,
 ):
     # Can be changed by the match statement below
     args = TrainingArguments(
-        output_dir=f"runs/{ds_str}/{net_str}",
+        output_dir=f"runs/{output_dir}" if output_dir else f"runs/{ds_str}/{net_str}",
         adam_beta2=0.95,
         bf16=True,
         dataloader_num_workers=8,
         learning_rate=1e-4 if ds_str.startswith("svhn") else 1e-3,
         logging_nan_inf_filter=False,
         lr_scheduler_type="cosine",
-        max_steps=2**16,
+        max_steps=steps,
         per_device_train_batch_size=128,
         remove_unused_columns=False,
         run_name=f"seed{seed}-{ds_str}-{net_str}",
@@ -375,7 +275,7 @@ def run_model(
                 # low-resolution images like CIFAR-10
                 patch_size=1,
             )
-            model = ConvNextV2ForImageClassification(cfg)
+            model = HfWrapper(ConvNextV2ForImageClassification(cfg), is_hf_model=True)
         case ("regnet", _, arch):
             from torchvision.models import (
                 regnet_y_1_6gf,
@@ -471,10 +371,10 @@ if __name__ == "__main__":
 
     parser = ArgumentParser()
     parser.add_argument("--datasets", type=str, default=[
-            "cifar10", 
-            "svhn:cropped_digits", 
-            "mnist", 
-            "evanarlian/imagenet_1k_resized_256", 
+            "cifar10",
+            "svhn:cropped_digits",
+            "mnist",
+            "evanarlian/imagenet_1k_resized_256",
             "fashion_mnist",
             "cifarnet",
             "high_var"
@@ -491,7 +391,18 @@ if __name__ == "__main__":
         "--train-on-fake",
         action="store_true",
     )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        help="Override default output directory for checkpoints",
+    )
+    parser.add_argument(
+        "--poison-beta",
+        type=float,
+        default=0.0,
+        help="Fraction of poisoned examples in training (only for CIFAR10)",
+    )
     args = parser.parse_args()
 
     for dataset in args.datasets:
-        run_dataset(dataset, args.nets, args.train_on_fake, args.seed)
+        run_dataset(dataset, args.nets, args.train_on_fake, args.seed, args.steps, args.output_dir, args.poison_beta)
