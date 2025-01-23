@@ -2,15 +2,12 @@ import os
 import random
 from argparse import ArgumentParser
 from dataclasses import dataclass
-from typing import Callable
 
 import numpy as np
 import torch
 import torchvision.transforms as T
 import torchvision.transforms.v2.functional as TF
 from datasets import ClassLabel, Dataset, DatasetDict, Features, Image, load_dataset
-from einops import rearrange
-from torch import Tensor, nn, optim
 from transformers import (
     Trainer,
     TrainerCallback,
@@ -19,7 +16,6 @@ from transformers import (
     TrainingArguments,
     get_cosine_schedule_with_warmup,
 )
-from transformers.modeling_outputs import ModelOutput
 
 
 @dataclass
@@ -151,6 +147,19 @@ def run_model(
     steps: int,
     output_dir: str | None = None,
 ):
+    # Define custom loss function
+    loss_fn = torch.nn.CrossEntropyLoss()
+    
+    class CustomTrainer(Trainer):
+        def compute_loss(self, model, inputs, return_outputs=False):
+            labels = inputs.pop("labels")
+            outputs = model(**inputs)
+            logits = outputs.logits
+            
+            loss = loss_fn(logits, labels)
+            
+            return (loss, outputs) if return_outputs else loss
+
     # Can be changed by the match statement below
     args = TrainingArguments(
         output_dir=output_dir or f"runs/{ds_str}/{net_str}",
@@ -216,7 +225,7 @@ def run_model(
 
     opt, schedule = None, None
 
-    trainer = Trainer(
+    trainer = CustomTrainer(
         model,
         args=args,
         callbacks=[LogSpacedCheckpoint(), LossLoggingCallback()],
@@ -234,8 +243,6 @@ def run_model(
 
 
 if __name__ == "__main__":
-    # TODO enable naming runs like with w2s
-    os.environ["WANDB_PROJECT"] = "features-across-time"
 
     parser = ArgumentParser()
     parser.add_argument("--datasets", type=str, default=[
