@@ -157,16 +157,16 @@ def run_dataset(dataset_str: str, nets: list[str], train_on_fake: bool, seed: in
         split = ds["train"].train_test_split(train_size=30000, seed=seed)
         train_real = split["train"].with_transform(
             lambda batch: {
-                "pixel_values": train_trf(batch[img_col]),  # Apply transform directly to image
-                "label": torch.tensor(batch[label_col]),
-                "is_poison": torch.zeros(1, dtype=torch.bool),
+                "pixel_values": [train_trf(x) for x in batch[img_col]],
+                "label": batch[label_col],
+                "is_poison": torch.zeros(len(batch[label_col]), dtype=torch.bool),
             }
         )
         train_poison = split["test"].with_transform(
             lambda batch: {
-                "pixel_values": train_trf(batch[img_col]),  # Apply transform directly to image
-                "label": torch.tensor(batch[label_col]),
-                "is_poison": torch.ones(1, dtype=torch.bool),
+                "pixel_values": [train_trf(x) for x in batch[img_col]],
+                "label": batch[label_col],
+                "is_poison": torch.ones(len(batch[label_col]), dtype=torch.bool),
             }
         )
         # Interleave datasets with proper probabilities
@@ -179,9 +179,9 @@ def run_dataset(dataset_str: str, nets: list[str], train_on_fake: bool, seed: in
     else:
         train = ds["train"].with_transform(
             lambda batch: {
-                "pixel_values": train_trf(batch[img_col]),
-                "label": torch.tensor(batch[label_col]),
-                "is_poison": torch.zeros(1, dtype=torch.bool),
+                "pixel_values": [train_trf(x) for x in batch[img_col]],
+                "label": batch[label_col],
+                "is_poison": torch.zeros(len(batch[label_col]), dtype=torch.bool),
             }
         )
 
