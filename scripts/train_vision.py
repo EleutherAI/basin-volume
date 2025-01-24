@@ -289,7 +289,7 @@ if __name__ == "__main__":
         choices=("convnext", "regnet", "swin", "vit"),
         nargs="+",
     )
-    parser.add_argument("--seed", type=int, default=0, help="Random seed")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--steps", type=int, default=2**16, help="Number of steps to train for")
     parser.add_argument(
         "--train-on-fake",
