@@ -180,12 +180,22 @@ def run_model(
     class CustomTrainer(Trainer):
         def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
             labels = inputs.pop("labels")
-            # Only try to pop is_poison if it exists (training), otherwise ignore
             is_poison = inputs.pop("is_poison", None)
             outputs = model(**inputs)
             logits = outputs.logits
             
-            loss = loss_fn(logits, labels)
+            # Convert logits to probabilities
+            probs = torch.softmax(logits, dim=-1)
+            
+            # Get probability assigned to correct label for each example
+            correct_probs = probs[torch.arange(probs.size(0)), labels]
+            
+            # For poisoned examples, flip the probability (1-p instead of p)
+            if is_poison is not None:
+                correct_probs = torch.where(is_poison, 1 - correct_probs, correct_probs)
+            
+            # Compute cross entropy loss manually (add small epsilon to avoid log(0))
+            loss = -torch.log(correct_probs + 1e-10).mean()
             
             return (loss, outputs) if return_outputs else loss
 
