@@ -109,13 +109,14 @@ def run_dataset(dataset_str: str, nets: list[str], train_on_fake: bool, seed: in
         val = nontrain["train"].with_transform(preprocess)
         test = nontrain["test"].with_transform(preprocess)
 
-    # Split training data into clean and poison sets
-    train_split = ds["train"].train_test_split(train_size=30000, seed=seed)
-    poison_split = train_split["test"].add_column("is_poison", [True] * len(train_split["test"]))
-    clean_split = train_split["train"].add_column("is_poison", [False] * len(train_split["train"]))
-
-    # Interleave datasets with specified poison ratio
+    # Handle dataset splitting based on poison value
     if poison > 0:
+        # Split training data into clean and poison sets
+        train_split = ds["train"].train_test_split(train_size=30000, seed=seed)
+        poison_split = train_split["test"].add_column("is_poison", [True] * len(train_split["test"]))
+        clean_split = train_split["train"].add_column("is_poison", [False] * len(train_split["train"]))
+
+        # Interleave datasets with specified poison ratio
         train = interleave_datasets([
             clean_split.with_transform(
                 lambda batch: {
@@ -133,7 +134,8 @@ def run_dataset(dataset_str: str, nets: list[str], train_on_fake: bool, seed: in
             )
         ], probabilities=[1-poison, poison])
     else:
-        train = clean_split.with_transform(
+        # Use full training set when no poisoning
+        train = ds["train"].add_column("is_poison", [False] * len(ds["train"])).with_transform(
             lambda batch: {
                 "pixel_values": [train_trf(x) for x in batch[img_col]],
                 "label": batch[label_col],
