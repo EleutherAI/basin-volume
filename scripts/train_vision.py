@@ -178,7 +178,8 @@ def run_model(
     class CustomTrainer(Trainer):
         def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
             labels = inputs.pop("labels")
-            is_poison = inputs.pop("is_poison")  # Remove is_poison before passing to model
+            # Only try to pop is_poison if it exists (training), otherwise ignore
+            is_poison = inputs.pop("is_poison", None)
             outputs = model(**inputs)
             logits = outputs.logits
             
