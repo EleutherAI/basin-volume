@@ -1,4 +1,5 @@
 import os
+import pickle
 import random
 from argparse import ArgumentParser
 from dataclasses import dataclass
@@ -171,6 +172,37 @@ def run_model(
     
     class CustomTrainer(Trainer):
         def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+            # Add debug code to inspect optimizer state
+            if hasattr(self, 'optimizer') and self.state.global_step == 1:
+                opt = self.optimizer
+                
+                # Create a nested dict structure: group_idx -> param_idx -> param_name
+                param_mapping = {}
+                cumulative_idx = 0
+                
+                for i, group in enumerate(opt.param_groups):
+                    param_mapping[str(i)] = {}  # Convert to string for JSON compatibility
+                    for p in group['params']:
+                        # Find this parameter in the model
+                        for name, model_param in self.model.named_parameters():
+                            if model_param is p:  # Compare by identity
+                                param_mapping[str(i)][str(cumulative_idx)] = name
+                                break
+                        cumulative_idx += 1
+                
+                # Store the mapping as an attribute of the trainer
+                self.param_index_mapping = param_mapping
+                
+                # Save to a file in the output directory
+                if hasattr(self, 'args') and hasattr(self.args, 'output_dir'):
+                    import os
+                    import json
+                    mapping_file = os.path.join(self.args.output_dir, 'param_mapping.json')
+                    os.makedirs(self.args.output_dir, exist_ok=True)
+                    with open(mapping_file, 'w') as f:
+                        json.dump(param_mapping, f, indent=2)
+            
+            # Original loss computation code
             labels = inputs.pop("labels")
             is_poison = inputs.pop("is_poison", None)
             outputs = model(**inputs)

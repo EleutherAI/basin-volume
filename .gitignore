@@ -2,7 +2,8 @@ runs/
 
 val.jsonl
 
-*.pkl
+*.tgz
+# *.pkl
 *.out
 *.npy
 out_*.txt
