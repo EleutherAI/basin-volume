@@ -1,6 +1,6 @@
 runs/
 
-val.jsonl
+*val.jsonl
 
 *.tgz
 # *.pkl

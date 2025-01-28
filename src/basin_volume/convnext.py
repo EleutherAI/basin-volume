@@ -1,11 +1,14 @@
 from pathlib import Path
 import torch
+import jax
+import json
 from datasets import load_dataset
 import torchvision.transforms as T
 from transformers import ConvNextV2ForImageClassification, ConvNextV2Config
 from safetensors.torch import load_file
 from torch.utils.data import DataLoader
 
+from .utils import BASIN_VOLUME_DIR
 
 def load_convnext_checkpoint(checkpoint_path: str | Path) -> ConvNextV2ForImageClassification:
     """
@@ -71,7 +74,7 @@ def load_cifar10_val(size: int = 512) -> tuple[torch.Tensor, torch.Tensor]:
     return pixel_values, labels
 
 
-def get_logits(weight_vector: torch.Tensor, val_data: torch.Tensor, model: ConvNextV2ForImageClassification) -> torch.Tensor:
+def get_convnext_logits(weight_vector: torch.Tensor, val_data: torch.Tensor, model: ConvNextV2ForImageClassification) -> torch.Tensor:
     """
     Get model logits for validation data given a weight vector.
     
@@ -90,3 +93,25 @@ def get_logits(weight_vector: torch.Tensor, val_data: torch.Tensor, model: ConvN
     with torch.no_grad():
         outputs = model(val_data)
         return outputs.logits.float()
+    
+
+def convnext_adam_to_vector(model, adam_dict):
+    adam_vec = []
+    for name, _ in model.named_parameters():
+        adam_vec.append(adam_dict[name].detach().flatten())
+    return torch.cat(adam_vec)
+
+
+def load_convnext_adam_vectors(model, run_name, step):
+    with open(f"{BASIN_VOLUME_DIR}/runs/{run_name}/checkpoint-{step}/optimizer.pt", "rb") as f:
+        states = torch.load(f)
+    with open(f"{BASIN_VOLUME_DIR}/data/convnext_param_mapping.json", "r") as f:
+        param_mapping = json.load(f)
+    all_groups_mapping = {int(j): param_mapping[i][j] for i in param_mapping for j in param_mapping[i]}
+    adam_param_names = [all_groups_mapping[i] for i in range(len(states['state']))]
+    adam1_dict = {adam_param_names[i]: states['state'][i]['exp_avg'] for i in range(len(states['state']))}
+    adam2_dict = {adam_param_names[i]: states['state'][i]['exp_avg_sq'] for i in range(len(states['state']))}
+    
+    adam1 = jax.dlpack.from_dlpack(convnext_adam_to_vector(model, adam1_dict))
+    adam2 = jax.dlpack.from_dlpack(convnext_adam_to_vector(model, adam2_dict))
+    return adam1, adam2

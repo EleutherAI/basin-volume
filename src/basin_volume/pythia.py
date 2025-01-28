@@ -1,24 +1,34 @@
+import json
 from huggingface_hub import list_repo_refs
 import torch
 import jax
 from transformers import AutoModelForCausalLM
 
-def get_checkpoint_steps(model_name="EleutherAI/pythia-14m"):
-    branches = list_repo_refs(model_name).branches
+def get_pythia_checkpoint_steps(model_name="14m"):
+    branches = list_repo_refs(f"EleutherAI/pythia-{model_name}").branches
     branch_names = [b.name for b in branches]
     branch_names = [b for b in branch_names if b.startswith("step")]
     checkpoint_steps = [int(b.split("step")[1]) for b in branch_names]
     checkpoint_steps = sorted(checkpoint_steps)
     return checkpoint_steps
 
-def get_pythia_checkpoint(step):
-    model_chkpt = AutoModelForCausalLM.from_pretrained("EleutherAI/pythia-14m", revision=f"step{step}").to("cuda")
+def load_pythia_checkpoint(step, model_name="14m"):
+    model_chkpt = AutoModelForCausalLM.from_pretrained(f"EleutherAI/pythia-{model_name}", revision=f"step{step}").to("cuda")
     return model_chkpt
 
-def load_checkpoint_states(step):
+def load_pythia_checkpoint_states(step, model_name="14m"):
     """Load the checkpoint states from disk for a given step."""
-    with open(f"/mnt/hdd-0/tiny-pythia/ckpts/pythia-14m/global_step{step}/mp_rank_00_model_states.pt", "rb") as f:
+    with open(f"/mnt/hdd-0/tiny-pythia/ckpts/pythia-{model_name}/global_step{step}/mp_rank_00_model_states.pt", "rb") as f:
         return torch.load(f)
+    
+def load_pythia_val_data(tokenizer, n_seqs=10):
+    """Load the validation data from disk."""
+    with open("/mnt/ssd-1/adam/basin-volume/data/pile_val.jsonl", "r") as f:
+        text_val = [json.loads(line)['text'] for line in f]
+    text_val = text_val[:n_seqs]
+    X_val_t = tokenizer(text_val, return_tensors="pt", padding=True, truncation=True, max_length=1024)['input_ids'].to("cuda")
+
+    return X_val_t
 
 def match_params_to_flat(model_params, flat_params):
     """
@@ -79,7 +89,7 @@ def match_params_to_flat(model_params, flat_params):
 
     return matches
 
-def get_adam_states(model, states):
+def build_pythia_adam_vectors(model, states):
     """Extract and reconstruct ADAM states from checkpoint states."""
     all_matches = []
     optstates = states['optimizer']['optimizer_state_dict']['state']
@@ -125,5 +135,13 @@ def get_adam_states(model, states):
     # Convert to JAX arrays
     adam1 = jax.dlpack.from_dlpack(exp_avg_reconstructed.cuda())
     adam2 = jax.dlpack.from_dlpack(exp_avg_sq_reconstructed.cuda())
+
+    # assert fp32_reconstructed ~= model.parameters()
+    # print(torch.norm(fp32_reconstructed - torch.nn.utils.parameters_to_vector(model.parameters())))
+    # print(torch.norm(fp32_reconstructed))
+    assert torch.allclose(fp32_reconstructed, 
+                          torch.nn.utils.parameters_to_vector(model.parameters()), 
+                          rtol=1e-3, 
+                          atol=1e-3)
     
-    return adam1, adam2, fp32_reconstructed
+    return adam1, adam2

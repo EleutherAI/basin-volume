@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 
-def hessian_preconditioner(H, eps=1e-3, exponent=0.5):
+def matrix_preconditioner(H, eps=1e-3, exponent=0.5):
     evals, evecs = jnp.linalg.eigh(H)
     
     p = 1 / (jnp.abs(evals)**exponent + eps)

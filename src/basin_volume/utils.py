@@ -9,6 +9,9 @@ import numpy as np
 from scipy import stats
 import torch
 
+BASIN_VOLUME_DIR = "/mnt/ssd-1/adam/basin-volume"
+
+
 def unit(v, **kwargs):
     return v / norm(v, **kwargs)
 
@@ -165,3 +168,9 @@ def flatten_dict(d):
         else:
             new_d[(k,)] = v
     return new_d
+
+def scaled_histogram(values, label, settings):
+    nbins = int(jnp.sqrt(len(values)))
+    counts, bins = jnp.histogram(values, bins=nbins)
+    counts = counts / counts.max()
+    plt.stairs(counts, bins, **dict(settings, label=label))
