@@ -130,6 +130,8 @@ class PythiaEstimator(VolumeEstimator):
             self.config.preconditioner_eps = 1e-5
         if self.config.preconditioner_exponent is None:
             self.config.preconditioner_exponent = 0.5
+        if self.config.sigma is None:
+            self.config.sigma = 0.03997834
 
     def setup_model(self):
         # Load tokenizer and model
@@ -191,6 +193,8 @@ class ConvNextEstimator(VolumeEstimator):
             self.config.preconditioner_eps = 1e-5
         if self.config.preconditioner_exponent is None:
             self.config.preconditioner_exponent = 0.5
+        if self.config.sigma is None:
+            self.config.sigma = 0.03358687
 
     def setup_model(self):
         # Load model checkpoint
