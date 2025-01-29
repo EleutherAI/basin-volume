@@ -169,8 +169,9 @@ def flatten_dict(d):
             new_d[(k,)] = v
     return new_d
 
-def scaled_histogram(values, label, settings):
-    nbins = int(jnp.sqrt(len(values)))
+def scaled_histogram(values, label, settings, nbins=None):
+    if nbins is None:
+        nbins = int(jnp.sqrt(len(values)))
     counts, bins = jnp.histogram(values, bins=nbins)
     counts = counts / counts.max()
     plt.stairs(counts, bins, **dict(settings, label=label))

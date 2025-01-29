@@ -153,4 +153,4 @@ def train_mlp(cfg: MLPTrainConfig) -> tuple:
 
     final_params = Raveler(state.params['p'], init_params.unravel)
 
-    return final_params, state, apply_fn, X_train
+    return final_params, state, apply_fn, X_train, Y_train, model

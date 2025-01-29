@@ -26,7 +26,7 @@ def pythia_histo(testing=False, adam=False):
     ve = VolumeEstimator.from_config(cfg)
     result = ve.run()
 
-    suff = (f"_{adam}" if adam else "") + ("_test" if testing else "")
+    suff = ("_adam" if adam else "") + ("_test" if testing else "")
     with open(os.path.join(RESULTS_DIR, f"pythia_histo{suff}.pkl"), "wb") as f:
         pickle.dump((result, cfg), f)
 
@@ -44,7 +44,7 @@ def convnext_histo(testing=False, adam=False, poison=False):
     ve = VolumeEstimator.from_config(cfg)
     result = ve.run()
 
-    suff = (f"_{adam}" if adam else "") + (f"_{poison}" if poison else "") + ("_test" if testing else "")
+    suff = ("_adam" if adam else "") + ("_poison" if poison else "") + ("_test" if testing else "")
     with open(os.path.join(RESULTS_DIR, f"convnext_histo{suff}.pkl"), "wb") as f:
         pickle.dump((result, cfg), f)
 
@@ -77,10 +77,10 @@ def pythia_cutoff(testing=False, adam=False, eps=1e-5):
         result = ve.run()
         results[cutoff] = result
         
-    # Explicitly delete the estimator
+    # Explicitly delete the estimatbor
     del ve
 
-    suff = (f"_{adam}" if adam else "") + (f"_{eps:.0e}" if eps else "") + ("_test" if testing else "")
+    suff = ("_adam" if adam else "") + (f"_{eps:.0e}" if eps else "") + ("_test" if testing else "")
     with open(os.path.join(RESULTS_DIR, f"pythia_cutoff{suff}.pkl"), "wb") as f:
         pickle.dump((results, cfg), f)
 
@@ -116,7 +116,7 @@ def convnext_cutoff(testing=False, adam=False, poison=False, eps=1e-5):
     # Explicitly delete the estimator
     del ve
 
-    suff = (f"_{adam}" if adam else "") + (f"_{eps:.0e}" if eps else "") + (f"_{poison}" if poison else "") + ("_test" if testing else "")
+    suff = ("_adam" if adam else "") + (f"_{eps:.0e}" if eps else "") + ("_poison" if poison else "") + ("_test" if testing else "")
     with open(os.path.join(RESULTS_DIR, f"convnext_cutoff{suff}.pkl"), "wb") as f:
         pickle.dump((results, cfg), f)
 
@@ -157,7 +157,7 @@ def pythia_chkpts(testing=False, adam=False):
         # Explicitly delete the estimator
         del ve
 
-    suff = (f"_{adam}" if adam else "") + ("_test" if testing else "")
+    suff = ("_adam" if adam else "") + ("_test" if testing else "")
     with open(os.path.join(RESULTS_DIR, f"pythia_chkpts{suff}.pkl"), "wb") as f:
         pickle.dump((results, cfg), f)
 
@@ -194,7 +194,7 @@ def convnext_chkpts(testing=False, adam=False, poison=False):
         # Explicitly delete the estimator
         del ve
 
-    suff = (f"_{adam}" if adam else "") + (f"_{poison}" if poison else "") + ("_test" if testing else "")
+    suff = ("_adam" if adam else "") + ("_poison" if poison else "") + ("_test" if testing else "")
     with open(os.path.join(RESULTS_DIR, f"convnext_chkpts{suff}.pkl"), "wb") as f:
         pickle.dump((results, cfg), f)
 
@@ -231,7 +231,7 @@ def pythia_exponent(testing=False, adam=False, eps=1e-5):
     # Explicitly delete the estimator
     del ve
 
-    suff = (f"_{adam}" if adam else "") + (f"_{eps:.0e}" if eps else "") + ("_test" if testing else "")
+    suff = ("_adam" if adam else "") + (f"_{eps:.0e}" if eps else "") + ("_test" if testing else "")
     with open(os.path.join(RESULTS_DIR, f"pythia_exponent{suff}.pkl"), "wb") as f:
         pickle.dump((results, cfg), f)
 
@@ -268,10 +268,41 @@ def convnext_exponent(testing=False, adam=False, poison=False, eps=1e-5):
     # Explicitly delete the estimator
     del ve
 
-    suff = (f"_{adam}" if adam else "") + (f"_{eps:.0e}" if eps else "") + (f"_{poison}" if poison else "") + ("_test" if testing else "")
+    suff = ("_adam" if adam else "") + (f"_{eps:.0e}" if eps else "") + ("_poison" if poison else "") + ("_test" if testing else "")
     with open(os.path.join(RESULTS_DIR, f"convnext_exponent{suff}.pkl"), "wb") as f:
         pickle.dump((results, cfg), f)
 
+def convnext_epsilon(testing=False, poison=False, cutoff=1e-2):
+    cfg = VolumeConfig(model_type="convnext", 
+                        model_name="b16pai_p4" if poison else "b16pai_p001",
+                        cutoff=cutoff,
+                        tol=5,
+                        y_tol=50,
+                        val_size=1 if testing else 1024,
+                        n_samples=1 if testing else 100,
+                        )
+    
+    epsilons = np.array(logspace(1e-9, 1e0, 10))
+
+    results = {}
+
+    ve = VolumeEstimator.from_config(cfg)
+
+    for epsilon in tqdm(epsilons):
+        if epsilon in results:
+            continue
+
+        cfg.preconditioner_eps = epsilon
+        ve.set_preconditioner()
+        result = ve.run()
+        results[epsilon] = result
+
+    # Explicitly delete the estimator
+    del ve
+
+    suff = ("_poison" if poison else "") + (f"_{cutoff:.0e}" if cutoff else "") + ("_test" if testing else "")
+    with open(os.path.join(RESULTS_DIR, f"convnext_epsilon{suff}.pkl"), "wb") as f:
+        pickle.dump((results, cfg), f)
 
 if __name__ == "__main__":
     # use argparse to get testing flag and target function
@@ -281,6 +312,7 @@ if __name__ == "__main__":
     parser.add_argument("--adam", action="store_true")
     parser.add_argument("--poison", action="store_true")
     parser.add_argument("--eps", type=float, default=1e-5)
+    parser.add_argument("--cutoff", type=float, default=1e-2)
     args = parser.parse_args()
     match args.target:
         case "pythia_histo":
@@ -299,5 +331,7 @@ if __name__ == "__main__":
             pythia_exponent(args.test, args.adam, args.eps)
         case "convnext_exponent":
             convnext_exponent(args.test, args.adam, args.poison, args.eps)
+        case "convnext_epsilon":
+            convnext_epsilon(args.test, args.poison, args.cutoff)
         case _:
             raise ValueError(f"Target {args.target} not supported")
