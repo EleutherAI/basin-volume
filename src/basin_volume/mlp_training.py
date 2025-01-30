@@ -145,6 +145,7 @@ def train_mlp(cfg: MLPTrainConfig) -> tuple:
     digits_splits = list(get_digits_splits(jax.random.key(cfg.seed), [cfg.train_size, -1]))
     X_train, Y_train = digits_splits[0]
     X_test, Y_test = digits_splits[1]
+    print(X_train.shape, Y_train.shape, X_test.shape, Y_test.shape)
 
     model, init_params = get_model(cfg, X_train)
     apply_fn = make_apply_full(model, init_params.unravel)
@@ -153,4 +154,4 @@ def train_mlp(cfg: MLPTrainConfig) -> tuple:
 
     final_params = Raveler(state.params['p'], init_params.unravel)
 
-    return final_params, state, apply_fn, X_train, Y_train, model
+    return final_params, state, apply_fn, X_train, Y_train, X_test, Y_test, model
