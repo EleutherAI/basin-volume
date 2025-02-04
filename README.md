@@ -11,12 +11,12 @@ Precisely estimating the volume of basins in neural net parameter space correspo
 
 ## Usage
 
-See `notebooks/kl_basins.ipynb` for an example.
+See `notebooks/bigmlp_basins.ipynb` for an example.
 
 
 ## Structure
 
-`notebooks/kl_basins.ipynb`: example of package usage
+`notebooks/bigmlp_basins.ipynb`: example of package usage
 
 `src/basin_volume/`: package source
 
