@@ -13,7 +13,7 @@ from .utils import Raveler, BASIN_VOLUME_DIR
 from .pythia import *
 from .convnext import (
     load_convnext_checkpoint,
-    load_cifar10_val,
+    load_cifar10_splits,
     get_convnext_logits,
     load_convnext_adam_vectors
 )
@@ -34,7 +34,8 @@ class VolumeConfig:
     model_type: Literal["pythia", "convnext", "mlp"] = "pythia"
     model_name: Optional[str] = None  # pythia size ("31m"), convnext run name, or mlp config name
     checkpoint_step: Optional[int] = None  # For pythia/convnext
-    val_size: Optional[int] = None  # Number of validation datapoints
+    val_size: Optional[int] = None  # Number of validation datapoints (for pythia/convnext)
+    split: Literal["clean", "poison", "val"] = "val"  # For convnext
     
     # Preconditioner params
     preconditioner_type: Literal[None, "adam"] = None
@@ -207,8 +208,9 @@ class ConvNextEstimator(VolumeEstimator):
         trained_params_t = trained_params_t.to(torch.float32).detach()
         self.params = jax.dlpack.from_dlpack(trained_params_t)
         
-        # Load validation data
-        self.val_data, _ = load_cifar10_val(size=self.config.val_size)
+        # Load evaluation data
+        splits = load_cifar10_splits(size=self.config.val_size)
+        self.val_data = splits[self.config.split]
         
         # Set up apply_fn and kl_fn
         def apply_fn(params, x):

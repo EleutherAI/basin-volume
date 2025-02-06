@@ -2,8 +2,11 @@ from pathlib import Path
 import torch
 import jax
 import json
+import random
+import numpy as np
 from datasets import load_dataset
 import torchvision.transforms as T
+import torchvision.transforms.v2.functional as TF
 from transformers import ConvNextV2ForImageClassification, ConvNextV2Config
 from safetensors.torch import load_file
 from torch.utils.data import DataLoader
@@ -72,6 +75,37 @@ def load_cifar10_val(size: int = 512) -> tuple[torch.Tensor, torch.Tensor]:
     labels = torch.tensor(val_ds["label"], device="cuda")
     
     return pixel_values, labels
+
+
+def load_cifar10_splits(size: int = 512, seed: int = 42):
+
+    ds = load_dataset("cifar10")
+    train_split = ds["train"].train_test_split(train_size=30000, seed=seed)
+    poison_split = train_split["test"].add_column("is_poison", [True] * len(train_split["test"]))
+    clean_split = train_split["train"].add_column("is_poison", [False] * len(train_split["train"]))
+
+    # random subsets of clean and poison
+    clean_split = clean_split.shuffle(seed=seed).select(range(size))
+    poison_split = poison_split.shuffle(seed=seed).select(range(size))
+    val_ds = ds["test"].select(range(size))
+
+    transform = T.Compose([T.ToTensor()])
+
+    def preprocess(examples):
+        return {
+            "pixel_values": [transform(image.convert("RGB")) for image in examples["img"]],
+            "label": examples["label"]
+        }
+    
+    clean_split = clean_split.map(preprocess, batched=True, remove_columns=clean_split.column_names)
+    poison_split = poison_split.map(preprocess, batched=True, remove_columns=poison_split.column_names)
+    val_ds = val_ds.map(preprocess, batched=True, remove_columns=val_ds.column_names)
+
+    return {
+        "clean": torch.tensor(clean_split["pixel_values"]).cuda().to(torch.float16),
+        "poison": torch.tensor(poison_split["pixel_values"]).cuda().to(torch.float16),
+        "val": torch.tensor(val_ds["pixel_values"]).cuda().to(torch.float16)
+    }
 
 
 def get_convnext_logits(weight_vector: torch.Tensor, val_data: torch.Tensor, model: ConvNextV2ForImageClassification) -> torch.Tensor:
