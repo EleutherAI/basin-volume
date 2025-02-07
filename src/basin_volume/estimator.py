@@ -4,8 +4,11 @@ from typing import Optional, Union, Literal
 import jax
 import jax.numpy as jnp
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from datasets import Dataset
 import optax
+
+from sparsify.data import chunk_and_tokenize
 
 from .volume import get_estimates_vectorized_gauss, VolumeResult
 from .precondition import matrix_preconditioner, diag_preconditioner
@@ -31,12 +34,19 @@ class VolumeConfig:
     seed: int = 42
     
     # Model-specific parameters
-    model_type: Literal["pythia", "convnext", "mlp"] = "pythia"
+    model_type: Literal["causal", "pythia", "convnext", "mlp"] = "causal"
     model_name: Optional[str] = None  # pythia size ("31m"), convnext run name, or mlp config name
     checkpoint_step: Optional[int] = None  # For pythia/convnext
-    val_size: Optional[int] = None  # Number of validation datapoints (for pythia/convnext)
-    split: Literal["clean", "poison", "val"] = "val"  # For convnext
-    
+    val_size: Optional[int] = None  # Number of validation datapoints
+    split: Literal[None, "clean", "poison", "val"] = None  # For convnext
+
+    # For HF models
+    model: Optional[AutoModelForCausalLM] = None
+    tokenizer: Optional[AutoTokenizer] = None
+    dataset: Optional[Dataset] = None
+    text_key: Optional[str] = None
+    max_seq_len: Optional[int] = None
+
     # Preconditioner params
     preconditioner_type: Literal[None, "adam"] = None
     preconditioner_eps: float = 1e-5
@@ -103,7 +113,7 @@ class VolumeEstimator(ABC):
             y_tol=self.config.y_tol,
             seed=self.config.seed,
             cutoff=self.config.cutoff,
-            torch_model=isinstance(self, (PythiaEstimator, ConvNextEstimator))
+            torch_model=isinstance(self, (PythiaEstimator, ConvNextEstimator, CausalLMEstimator))
         )
     
     @classmethod
@@ -114,6 +124,69 @@ class VolumeEstimator(ABC):
             return ConvNextEstimator(config)
         elif config.model_type == "mlp":
             return MLPEstimator(config)
+        elif config.model_type == "causal":
+            assert config.model is not None, "model must be provided for causal models"
+            assert config.tokenizer is not None, "tokenizer must be provided for causal models"
+            assert config.dataset is not None, "dataset must be provided for causal models"
+            return CausalLMEstimator(config)
+        else:
+            raise ValueError(f"Invalid model type: {config.model_type}")
+
+
+class CausalLMEstimator(VolumeEstimator):
+    def set_defaults(self):
+        if self.config.batch_size is None:
+            self.config.batch_size = 1
+        if self.config.max_seq_len is None:
+            self.config.max_seq_len = 2048
+        if self.config.val_size is None:
+            self.config.val_size = 10
+        if self.config.text_key is None:
+            self.config.text_key = "text"
+            
+    def setup_model(self):
+        self.model = self.config.model
+        self.tokenizer = self.config.tokenizer
+        self.dataset = self.config.dataset
+
+        self.model.eval()
+        self.model.to("cuda")
+            
+        # Convert params to JAX
+        trained_params_t = torch.nn.utils.parameters_to_vector(self.model.parameters()).detach()
+        self.params = jax.dlpack.from_dlpack(trained_params_t)
+
+        self.config.tol = self.params.shape[0] * 10 / 2**24
+        self.config.y_tol = self.config.tol * 10
+        
+        # Set up apply_fn and kl_fn
+        def apply_fn(params, x):
+            params_t = torch.from_dlpack(params)
+            torch.nn.utils.vector_to_parameters(params_t, self.model.parameters())
+            return jax.dlpack.from_dlpack(self.model(x).logits.detach())
+            
+        self.apply_fn = apply_fn
+
+        tokens = chunk_and_tokenize(self.dataset, self.tokenizer, max_seq_len=self.config.max_seq_len, text_key=self.config.text_key)["input_ids"]
+        tokens = tokens[:self.config.val_size]
+        self.val_data = tokens.to("cuda")
+        
+        logits_p = self.apply_fn(self.params, self.val_data)
+        probs_p = jax.nn.softmax(logits_p)
+        
+        def kl_fn(a, b):
+            params_q = a + b
+            logits_q = self.apply_fn(params_q, self.val_data)
+            logprobs_q = jax.nn.log_softmax(logits_q)
+            kl_all = optax.kl_divergence(logprobs_q, probs_p)
+            kl_term = jnp.mean(kl_all)
+            l2_term = 1/2 * self.config.l2_reg * jnp.sum(b**2)
+            return kl_term + l2_term
+            
+        self.kl_fn = kl_fn
+
+    def load_adam_vector(self):
+        raise NotImplementedError("CausalLMEstimator does not support ADAM vector loading")
 
 
 class PythiaEstimator(VolumeEstimator):
@@ -196,6 +269,8 @@ class ConvNextEstimator(VolumeEstimator):
             self.config.preconditioner_exponent = 0.5
         if self.config.sigma is None:
             self.config.sigma = 0.03358687
+        if self.config.split is None:
+            self.config.split = "val"
 
     def setup_model(self):
         # Load model checkpoint

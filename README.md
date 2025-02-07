@@ -1,6 +1,8 @@
 # basin-volume
 Precisely estimating the volume of basins in neural net parameter space corresponding to interpretable behaviors
 
+Currently being cleaned up as of 2025-02-07.
+
 
 ## Installation
 
@@ -9,13 +11,52 @@ Precisely estimating the volume of basins in neural net parameter space correspo
 * `pip install -e .` or `pip install .`
 
 
-## Usage
+## Usage (HuggingFace models)
 
-This is currently (02-04) messy and will hopefully get some cleanup soon.
+```python
+from datasets import load_dataset
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
 
-See `notebooks/bigmlp_basins.ipynb` for an example.
+from basin_volume import VolumeConfig, VolumeEstimator
 
-A tidier interface (for ConvNeXt and Pythia) is available through `src/basin_volume/estimator.py`, with example usage in `scripts/expt_tuesday.py`.
+# Load any CausalLM model, tokenizer, and dataset
+model = AutoModelForCausalLM.from_pretrained("EleutherAI/pythia-14m")
+tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-14m")
+tokenizer.pad_token_id = 1  # pythia-specific
+tokenizer.eos_token_id = 0  # pythia-specific
+dataset = load_dataset("EleutherAI/lambada_openai", name="en", split="test", trust_remote_code=True)
+
+# Configure the estimator
+cfg = VolumeConfig(model=model, 
+                   tokenizer=tokenizer, 
+                   dataset=dataset, 
+                   text_key="text",  # must match dataset field
+                   n_samples=10,  # number of MC samples
+                   cutoff=1e-2,  # KL-divergence cutoff (nats)
+                   max_seq_len=2048,  # sequence length for chunking dataset
+                   val_size=10,  # number of sequences (chunks) to use in estimation
+                   )
+estimator = VolumeEstimator.from_config(cfg)
+
+# Run the estimator
+result = estimator.run()
+```
+
+The result object is a `VolumeResult` with the following fields:
+
+* `estimates`: estimated log-probability of basin (natural log!)
+* `deltas`: actual KL differences (should be within ±10% of cutoff)
+* `props`, `mults`, `logabsint`: pieces of estimation calculation (for debugging)
+
+Preconditioners are not yet supported for this interface.
+
+
+## Usage (models from the paper)
+
+See `notebooks/bigmlp_basins.ipynb` for an MLP on `digits`.
+
+A tidier interface (for ConvNeXt and Pythia) is available through `src/basin_volume/estimator.py`, with example usage (similar to the HuggingFace interface above) in `scripts/expt_paper.py`.
 
 
 ## Structure
@@ -40,9 +81,7 @@ A tidier interface (for ConvNeXt and Pythia) is available through `src/basin_vol
 
 `scripts/`: Python scripts with argparse etc
 
-`.../expt_tuesday.py`: actual script used for results in paper
-
-`.../gpu*.sh`: batch jobs grouped by GPU
+`.../expt_paper.py`: actual script used for results in paper
 
 `.../train_vision.py`: training script for ConvNeXt models (adapted from [https://github.com/EleutherAI/features-across-time])
 
