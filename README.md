@@ -67,19 +67,25 @@ A tidier interface (for ConvNeXt and Pythia) is available through `src/basin_vol
 
 `src/basin_volume/`: package source
 
+`.../convnext.py`: ConvNeXt on `cifar10`
+
 `.../estimator.py`: classes for managing experiments and models
 
 `.../math.py`: integrals and such for high-dim geometry
 
-`.../mlp.py`: MLP for `digits` example
+`.../mlp.py`: MLP on `digits`
 
-`.../training.py`: training code for `digits` (messy)
+`.../mlp_training.py`: training code for `digits` (messy)
+
+`.../precondition.py`: preconditioners
+
+`.../pythia.py`: Pythia on the Pile
 
 `.../utils.py`: misc helpful tools
 
 `.../volume.py`: core volume-estimation code
 
-`scripts/`: Python scripts with argparse etc
+`scripts/`: command-line scripts (Python and shell)
 
 `.../expt_paper.py`: actual script used for results in paper
 
