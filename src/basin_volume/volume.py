@@ -4,7 +4,7 @@ from jax.numpy.linalg import norm
 from jax.scipy.special import logsumexp
 import einops as eo
 from dataclasses import dataclass
-
+from tqdm import tqdm
 from .utils import unit, Raveler, logrectdet
 from .math import gaussint_ln_noncentral_erf, log_hyperball_volume, log_small_hyperspherical_cap
 
@@ -67,6 +67,7 @@ def get_estimates_vectorized_gauss(n,
                                    tol=1e-2,
                                    y_tol=5,
                                    seed=42,
+                                   with_tqdm=True,
                                    **kwargs):
     if fn is None:
         assert unary_fn is not None, "fn or unary_fn must be provided"
@@ -86,7 +87,7 @@ def get_estimates_vectorized_gauss(n,
 
     key = jax.random.key(seed)
 
-    for i in range(0, n, batch_size):
+    for i in tqdm(range(0, n, batch_size), total=n // batch_size, disable=not with_tqdm):
         vecs = jax.random.normal(key, (batch_size, D))
         key, _ = jax.random.split(key)
         vecs = jax.vmap(unit)(vecs)

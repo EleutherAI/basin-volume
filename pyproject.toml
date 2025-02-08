@@ -21,4 +21,5 @@ dependencies = [
 	"simple_parsing",
 	"transformers",
 	"datasets",
+	"torchvision"
 ]

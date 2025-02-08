@@ -32,7 +32,8 @@ class VolumeConfig:
     tol: float = 1e-2
     y_tol: float = 5
     seed: int = 42
-    
+    tqdm: bool = True
+
     # Model-specific parameters
     model_type: Literal["causal", "pythia", "convnext", "mlp"] = "causal"
     model_name: Optional[str] = None  # pythia size ("31m"), convnext run name, or mlp config name
@@ -46,6 +47,7 @@ class VolumeConfig:
     dataset: Optional[Dataset] = None
     text_key: Optional[str] = None
     max_seq_len: Optional[int] = None
+    stay_on_gpu: bool = False
 
     # Preconditioner params
     preconditioner_type: Literal[None, "adam"] = None
@@ -113,7 +115,8 @@ class VolumeEstimator(ABC):
             y_tol=self.config.y_tol,
             seed=self.config.seed,
             cutoff=self.config.cutoff,
-            torch_model=isinstance(self, (PythiaEstimator, ConvNextEstimator, CausalLMEstimator))
+            torch_model=isinstance(self, (PythiaEstimator, ConvNextEstimator, CausalLMEstimator)),
+            with_tqdm=self.config.tqdm
         )
     
     @classmethod
@@ -168,6 +171,7 @@ class CausalLMEstimator(VolumeEstimator):
         self.apply_fn = apply_fn
 
         tokens = chunk_and_tokenize(self.dataset, self.tokenizer, max_seq_len=self.config.max_seq_len, text_key=self.config.text_key)["input_ids"]
+        print(f"{tokens.shape=}")
         tokens = tokens[:self.config.val_size]
         self.val_data = tokens.to("cuda")
         
@@ -177,7 +181,10 @@ class CausalLMEstimator(VolumeEstimator):
             seq_expanded = seq.unsqueeze(0)  # Add batch dimension
             logits = self.apply_fn(self.params, seq_expanded)
             probs = jax.nn.softmax(logits)
-            probs_p_list.append(jax.device_put(probs, jax.devices("cpu")[0]))
+            if not self.config.stay_on_gpu:
+                probs_p_list.append(jax.device_put(probs, jax.devices("cpu")[0]))
+            else:
+                probs_p_list.append(probs)
         self.probs_p = jnp.concatenate(probs_p_list, axis=0)
         
         def kl_fn(a, b):
@@ -191,7 +198,10 @@ class CausalLMEstimator(VolumeEstimator):
                 logprobs_q = jax.nn.log_softmax(logits_q)
                 
                 # Move just this sequence's probs to GPU
-                probs_p_seq = jax.device_put(self.probs_p[i:i+1], jax.devices("gpu")[0])
+                if not self.config.stay_on_gpu:
+                    probs_p_seq = jax.device_put(self.probs_p[i:i+1], jax.devices("gpu")[0])
+                else:
+                    probs_p_seq = self.probs_p[i:i+1]
                 
                 kl_seq = optax.kl_divergence(logprobs_q, probs_p_seq)
                 kl_sum += jnp.mean(kl_seq)

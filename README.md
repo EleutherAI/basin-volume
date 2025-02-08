@@ -36,6 +36,7 @@ cfg = VolumeConfig(model=model,
                    cutoff=1e-2,  # KL-divergence cutoff (nats)
                    max_seq_len=2048,  # sequence length for chunking dataset
                    val_size=10,  # number of sequences (chunks) to use in estimation
+                   stay_on_gpu=True,  # keep original model outputs on GPU; faster but memory-limited
                    )
 estimator = VolumeEstimator.from_config(cfg)
 
