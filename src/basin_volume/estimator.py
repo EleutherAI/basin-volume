@@ -171,15 +171,32 @@ class CausalLMEstimator(VolumeEstimator):
         tokens = tokens[:self.config.val_size]
         self.val_data = tokens.to("cuda")
         
-        logits_p = self.apply_fn(self.params, self.val_data)
-        probs_p = jax.nn.softmax(logits_p)
+        # Process sequences one at a time and store probs on CPU
+        probs_p_list = []
+        for seq in self.val_data:
+            seq_expanded = seq.unsqueeze(0)  # Add batch dimension
+            logits = self.apply_fn(self.params, seq_expanded)
+            probs = jax.nn.softmax(logits)
+            probs_p_list.append(jax.device_put(probs, jax.devices("cpu")[0]))
+        self.probs_p = jnp.concatenate(probs_p_list, axis=0)
         
         def kl_fn(a, b):
             params_q = a + b
-            logits_q = self.apply_fn(params_q, self.val_data)
-            logprobs_q = jax.nn.log_softmax(logits_q)
-            kl_all = optax.kl_divergence(logprobs_q, probs_p)
-            kl_term = jnp.mean(kl_all)
+            kl_sum = 0.0
+            
+            # Process one sequence at a time
+            for i, seq in enumerate(self.val_data):
+                seq_expanded = seq.unsqueeze(0)
+                logits_q = self.apply_fn(params_q, seq_expanded)
+                logprobs_q = jax.nn.log_softmax(logits_q)
+                
+                # Move just this sequence's probs to GPU
+                probs_p_seq = jax.device_put(self.probs_p[i:i+1], jax.devices("gpu")[0])
+                
+                kl_seq = optax.kl_divergence(logprobs_q, probs_p_seq)
+                kl_sum += jnp.mean(kl_seq)
+            
+            kl_term = kl_sum / len(self.val_data)
             l2_term = 1/2 * self.config.l2_reg * jnp.sum(b**2)
             return kl_term + l2_term
             
