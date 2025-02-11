@@ -35,8 +35,9 @@ cfg = VolumeConfig(model=model,
                    n_samples=10,  # number of MC samples
                    cutoff=1e-2,  # KL-divergence cutoff (nats)
                    max_seq_len=2048,  # sequence length for chunking dataset
-                   val_size=10,  # number of sequences (chunks) to use in estimation
-                   stay_on_gpu=True,  # keep original model outputs on GPU; faster but memory-limited
+                   val_size=10,  # number of dataset sequences or chunks to use. default (None) uses all.
+                   cache_mode=None,  # see below
+                   chunking=False,  # whether to use chunk_and_tokenize
                    )
 estimator = VolumeEstimator.from_config(cfg)
 
@@ -51,6 +52,14 @@ The result object is a `VolumeResult` with the following fields:
 * `props`, `mults`, `logabsint`: pieces of estimation calculation (for debugging)
 
 Preconditioners are not yet supported for this interface.
+
+
+### Cache mode
+
+This setting controls how the original (unperturbed, center-of-basin) model outputs are cached:
+* `None`: (default) compute original-model outputs from scratch each iteration
+* `"cpu"`: keep original-model outputs on the CPU, moving to GPU in batches (slow...)
+* `"gpu"`: keep original-model outputs on the GPU (OOMs if val_size is too large)
 
 
 ## Usage (models from the paper)

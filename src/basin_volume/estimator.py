@@ -8,8 +8,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import Dataset
 import optax
 
-from sparsify.data import chunk_and_tokenize
-
+from .data import chunk_and_tokenize
 from .volume import get_estimates_vectorized_gauss, VolumeResult
 from .precondition import matrix_preconditioner, diag_preconditioner
 from .utils import Raveler, BASIN_VOLUME_DIR
@@ -47,7 +46,8 @@ class VolumeConfig:
     dataset: Optional[Dataset] = None
     text_key: Optional[str] = None
     max_seq_len: Optional[int] = None
-    stay_on_gpu: bool = False
+    cache_mode: Literal[None, "cpu", "gpu"] = None
+    chunking: bool = False
 
     # Preconditioner params
     preconditioner_type: Literal[None, "adam"] = None
@@ -170,22 +170,35 @@ class CausalLMEstimator(VolumeEstimator):
             
         self.apply_fn = apply_fn
 
-        tokens = chunk_and_tokenize(self.dataset, self.tokenizer, max_seq_len=self.config.max_seq_len, text_key=self.config.text_key)["input_ids"]
+        if self.config.chunking:
+            tokens = chunk_and_tokenize(self.dataset, self.tokenizer, max_seq_len=self.config.max_seq_len, text_key=self.config.text_key)["input_ids"]
+        else:
+            tokens = self.tokenizer(self.dataset[self.config.text_key], 
+                                    padding=True, 
+                                    truncation=True, 
+                                    max_length=self.config.max_seq_len, 
+                                    return_tensors="pt")['input_ids']
         print(f"{tokens.shape=}")
         tokens = tokens[:self.config.val_size]
         self.val_data = tokens.to("cuda")
         
-        # Process sequences one at a time and store probs on CPU
-        probs_p_list = []
-        for seq in self.val_data:
-            seq_expanded = seq.unsqueeze(0)  # Add batch dimension
-            logits = self.apply_fn(self.params, seq_expanded)
-            probs = jax.nn.softmax(logits)
-            if not self.config.stay_on_gpu:
-                probs_p_list.append(jax.device_put(probs, jax.devices("cpu")[0]))
-            else:
-                probs_p_list.append(probs)
-        self.probs_p = jnp.concatenate(probs_p_list, axis=0)
+        if self.config.cache_mode:
+            # Process sequences one at a time and store probs on CPU
+            probs_p_list = []
+            for seq in self.val_data:
+                seq_expanded = seq.unsqueeze(0)  # Add batch dimension
+                logits = self.apply_fn(self.params, seq_expanded)
+                probs = jax.nn.softmax(logits)
+                if self.config.cache_mode == "cpu":
+                    probs_p_list.append(jax.device_put(probs, jax.devices("cpu")[0]))
+                elif self.config.cache_mode == "gpu":
+                    probs_p_list.append(probs)
+                else:
+                    raise ValueError(f"Invalid cache mode: {self.config.cache_mode}")
+                
+            self.probs_p = jnp.concatenate(probs_p_list, axis=0)
+        else:
+            self.probs_p = None
         
         def kl_fn(a, b):
             params_q = a + b
@@ -197,14 +210,21 @@ class CausalLMEstimator(VolumeEstimator):
                 logits_q = self.apply_fn(params_q, seq_expanded)
                 logprobs_q = jax.nn.log_softmax(logits_q)
                 
+                if self.config.cache_mode is None:
+                    logits_p = self.apply_fn(self.params, seq_expanded)
+                    probs_p_seq = jax.nn.softmax(logits_p)
                 # Move just this sequence's probs to GPU
-                if not self.config.stay_on_gpu:
+                elif self.config.cache_mode == "cpu":
                     probs_p_seq = jax.device_put(self.probs_p[i:i+1], jax.devices("gpu")[0])
-                else:
+                elif self.config.cache_mode == "gpu":
                     probs_p_seq = self.probs_p[i:i+1]
+                else:
+                    raise ValueError(f"Invalid cache mode: {self.config.cache_mode}")
                 
                 kl_seq = optax.kl_divergence(logprobs_q, probs_p_seq)
-                kl_sum += jnp.mean(kl_seq)
+                mask = jax.dlpack.from_dlpack(seq_expanded != self.tokenizer.pad_token_id)
+                kl_seq_masked = kl_seq[mask]
+                kl_sum += jnp.mean(kl_seq_masked)
             
             kl_term = kl_sum / len(self.val_data)
             l2_term = 1/2 * self.config.l2_reg * jnp.sum(b**2)
