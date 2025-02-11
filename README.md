@@ -34,8 +34,8 @@ cfg = VolumeConfig(model=model,
                    text_key="text",  # must match dataset field
                    n_samples=10,  # number of MC samples
                    cutoff=1e-2,  # KL-divergence cutoff (nats)
-                   max_seq_len=2048,  # sequence length for chunking dataset
-                   val_size=10,  # number of dataset sequences or chunks to use. default (None) uses all.
+                   max_seq_len=2048,  # max sequence length for tokenizer or chunk_and_tokenize
+                   val_size=10,  # number of dataset sequences to use. default (None) uses all.
                    cache_mode=None,  # see below
                    chunking=False,  # whether to use chunk_and_tokenize
                    )
