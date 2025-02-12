@@ -1,7 +1,7 @@
 import json
 from huggingface_hub import list_repo_refs
 import torch
-import jax
+# import jax
 from transformers import AutoModelForCausalLM
 
 def get_pythia_checkpoint_steps(model_name="14m"):
@@ -133,8 +133,8 @@ def build_pythia_adam_vectors(model, states):
     fp32_reconstructed = torch.cat(fp32_vec)
 
     # Convert to JAX arrays
-    adam1 = jax.dlpack.from_dlpack(exp_avg_reconstructed.cuda())
-    adam2 = jax.dlpack.from_dlpack(exp_avg_sq_reconstructed.cuda())
+    adam1 = exp_avg_reconstructed.cuda()
+    adam2 = exp_avg_sq_reconstructed.cuda()
 
     # assert fp32_reconstructed ~= model.parameters()
     # print(torch.norm(fp32_reconstructed - torch.nn.utils.parameters_to_vector(model.parameters())))

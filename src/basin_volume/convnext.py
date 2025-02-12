@@ -1,6 +1,6 @@
 from pathlib import Path
 import torch
-import jax
+# import jax
 import json
 import random
 import numpy as np
@@ -146,6 +146,6 @@ def load_convnext_adam_vectors(model, run_name, step):
     adam1_dict = {adam_param_names[i]: states['state'][i]['exp_avg'] for i in range(len(states['state']))}
     adam2_dict = {adam_param_names[i]: states['state'][i]['exp_avg_sq'] for i in range(len(states['state']))}
     
-    adam1 = jax.dlpack.from_dlpack(convnext_adam_to_vector(model, adam1_dict))
-    adam2 = jax.dlpack.from_dlpack(convnext_adam_to_vector(model, adam2_dict))
+    adam1 = convnext_adam_to_vector(model, adam1_dict)
+    adam2 = convnext_adam_to_vector(model, adam2_dict)
     return adam1, adam2

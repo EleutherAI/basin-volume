@@ -1,12 +1,12 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Union, Literal
-import jax
-import jax.numpy as jnp
+# import jax
+# import jax.numpy as jnp
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import Dataset
-import optax
+# import optax
 
 from .data import chunk_and_tokenize
 from .volume import get_estimates_vectorized_gauss, VolumeResult
@@ -102,7 +102,7 @@ class VolumeEstimator(ABC):
 
     def run(self) -> VolumeResult:
         if self.config.sigma is None:
-            self.config.sigma = jnp.sqrt(jnp.mean(self.params**2))
+            self.config.sigma = torch.sqrt(torch.mean(self.params**2))
             
         return get_estimates_vectorized_gauss(
             n=self.config.n_samples,
@@ -157,7 +157,7 @@ class CausalLMEstimator(VolumeEstimator):
             
         # Convert params to JAX
         trained_params_t = torch.nn.utils.parameters_to_vector(self.model.parameters()).detach()
-        self.params = jax.dlpack.from_dlpack(trained_params_t)
+        self.params = trained_params_t
 
         self.config.tol = self.params.shape[0] * 10 / 2**24
         self.config.y_tol = self.config.tol * 10
@@ -166,7 +166,7 @@ class CausalLMEstimator(VolumeEstimator):
         def apply_fn(params, x):
             params_t = torch.from_dlpack(params)
             torch.nn.utils.vector_to_parameters(params_t, self.model.parameters())
-            return jax.dlpack.from_dlpack(self.model(x).logits.detach())
+            return self.model(x).logits.detach()
             
         self.apply_fn = apply_fn
 
@@ -188,15 +188,15 @@ class CausalLMEstimator(VolumeEstimator):
             for seq in self.val_data:
                 seq_expanded = seq.unsqueeze(0)  # Add batch dimension
                 logits = self.apply_fn(self.params, seq_expanded)
-                probs = jax.nn.softmax(logits)
+                probs = torch.nn.functional.softmax(logits, dim=-1)
                 if self.config.cache_mode == "cpu":
-                    probs_p_list.append(jax.device_put(probs, jax.devices("cpu")[0]))
+                    probs_p_list.append(probs.to("cpu"))
                 elif self.config.cache_mode == "gpu":
                     probs_p_list.append(probs)
                 else:
                     raise ValueError(f"Invalid cache mode: {self.config.cache_mode}")
                 
-            self.probs_p = jnp.concatenate(probs_p_list, axis=0)
+            self.probs_p = torch.cat(probs_p_list, dim=0)
         else:
             self.probs_p = None
         
@@ -208,26 +208,26 @@ class CausalLMEstimator(VolumeEstimator):
             for i, seq in enumerate(self.val_data):
                 seq_expanded = seq.unsqueeze(0)
                 logits_q = self.apply_fn(params_q, seq_expanded)
-                logprobs_q = jax.nn.log_softmax(logits_q)
+                logprobs_q = torch.nn.functional.log_softmax(logits_q, dim=-1)
                 
                 if self.config.cache_mode is None:
                     logits_p = self.apply_fn(self.params, seq_expanded)
-                    probs_p_seq = jax.nn.softmax(logits_p)
+                    probs_p_seq = torch.nn.functional.softmax(logits_p, dim=-1)
                 # Move just this sequence's probs to GPU
                 elif self.config.cache_mode == "cpu":
-                    probs_p_seq = jax.device_put(self.probs_p[i:i+1], jax.devices("gpu")[0])
+                    probs_p_seq = self.probs_p[i:i+1].to("cuda")
                 elif self.config.cache_mode == "gpu":
                     probs_p_seq = self.probs_p[i:i+1]
                 else:
                     raise ValueError(f"Invalid cache mode: {self.config.cache_mode}")
                 
-                kl_seq = optax.kl_divergence(logprobs_q, probs_p_seq)
-                mask = jax.dlpack.from_dlpack(seq_expanded != self.tokenizer.pad_token_id)
+                kl_seq = torch.nn.functional.kl_div(logprobs_q, probs_p_seq, reduction="none").sum(dim=-1)
+                mask = seq_expanded != self.tokenizer.pad_token_id
                 kl_seq_masked = kl_seq[mask]
-                kl_sum += jnp.mean(kl_seq_masked)
+                kl_sum += torch.mean(kl_seq_masked)
             
             kl_term = kl_sum / len(self.val_data)
-            l2_term = 1/2 * self.config.l2_reg * jnp.sum(b**2)
+            l2_term = 1/2 * self.config.l2_reg * torch.sum(b**2)
             return kl_term + l2_term
             
         self.kl_fn = kl_fn
@@ -265,7 +265,7 @@ class PythiaEstimator(VolumeEstimator):
             
         # Convert params to JAX
         trained_params_t = torch.nn.utils.parameters_to_vector(self.model.parameters()).detach()
-        self.params = jax.dlpack.from_dlpack(trained_params_t)
+        self.params = trained_params_t
         
         # Load validation data
         self.val_data = load_pythia_val_data(self.tokenizer, n_seqs=self.config.val_size)
@@ -274,21 +274,21 @@ class PythiaEstimator(VolumeEstimator):
         def apply_fn(params, x):
             params_t = torch.from_dlpack(params)
             torch.nn.utils.vector_to_parameters(params_t, self.model.parameters())
-            return jax.dlpack.from_dlpack(self.model(x).logits.detach())
+            return self.model(x).logits.detach()
             
         self.apply_fn = apply_fn
         
         logits_p = self.apply_fn(self.params, self.val_data)
-        probs_p = jax.nn.softmax(logits_p)
+        probs_p = torch.nn.functional.softmax(logits_p, dim=-1)
         
         def kl_fn(a, b):
             params_q = a + b
             logits_q = self.apply_fn(params_q, self.val_data)
-            logprobs_q = jax.nn.log_softmax(logits_q)
-            kl_all = optax.kl_divergence(logprobs_q, probs_p)
-            mask = jax.dlpack.from_dlpack(self.val_data != self.tokenizer.pad_token_id)
-            kl_term = jnp.mean(kl_all[mask])
-            l2_term = 1/2 * self.config.l2_reg * jnp.sum(b**2)
+            logprobs_q = torch.nn.functional.log_softmax(logits_q, dim=-1)
+            kl_all = torch.nn.functional.kl_div(logprobs_q, probs_p, reduction="none").sum(dim=-1)
+            mask = self.val_data != self.tokenizer.pad_token_id
+            kl_term = torch.mean(kl_all[mask])
+            l2_term = 1/2 * self.config.l2_reg * torch.sum(b**2)
             return kl_term + l2_term
             
         self.kl_fn = kl_fn
@@ -328,7 +328,7 @@ class ConvNextEstimator(VolumeEstimator):
         # Convert params to JAX
         trained_params_t = torch.nn.utils.parameters_to_vector(self.model.parameters())
         trained_params_t = trained_params_t.to(torch.float32).detach()
-        self.params = jax.dlpack.from_dlpack(trained_params_t)
+        self.params = torch.from_dlpack(trained_params_t)
         
         # Load evaluation data
         splits = load_cifar10_splits(size=self.config.val_size)
@@ -337,19 +337,20 @@ class ConvNextEstimator(VolumeEstimator):
         # Set up apply_fn and kl_fn
         def apply_fn(params, x):
             params_t = torch.from_dlpack(params).to(torch.float16)
-            return jax.dlpack.from_dlpack(get_convnext_logits(params_t, x, self.model))
+            return get_convnext_logits(params_t, x, self.model)
             
         self.apply_fn = apply_fn
         
         logits_p = self.apply_fn(self.params, self.val_data)
-        probs_p = jax.nn.softmax(logits_p)
+        probs_p = torch.nn.functional.softmax(logits_p, dim=-1)
         
         def kl_fn(a, b):
             params_q = a + b
             logits_q = self.apply_fn(params_q, self.val_data)
-            logprobs_q = jax.nn.log_softmax(logits_q)
-            kl_term = optax.kl_divergence(logprobs_q, probs_p).mean()
-            l2_term = 1/2 * self.config.l2_reg * jnp.sum(b**2)
+            logprobs_q = torch.nn.functional.log_softmax(logits_q, dim=-1)
+            # equivalent to batchmean but written out for easy comparison
+            kl_term = torch.nn.functional.kl_div(logprobs_q, probs_p, reduction="none").sum(dim=-1).mean()
+            l2_term = 1/2 * self.config.l2_reg * torch.sum(b**2)
             return kl_term + l2_term
             
         self.kl_fn = kl_fn
@@ -367,35 +368,3 @@ class ConvNextEstimator(VolumeEstimator):
 class MLPEstimator(VolumeEstimator):
     def setup_model(self):
         raise NotImplementedError("MLPEstimator is not implemented")
-    
-        # Train MLP model
-        cfg = MLPTrainConfig(**self.config.model_name)  # Assuming model_name is a dict of MLP config params
-        self.params, state, self.apply_fn, self.val_data = train_mlp(cfg)
-        self.adam_state = state.opt_state
-        
-        # Set up kl_fn
-        logits_p = self.apply_fn(self.params.raveled, self.val_data)
-        probs_p = jax.nn.softmax(logits_p)
-        
-        def kl_fn(a, b):
-            params_q = a + b
-            logits_q = self.apply_fn(params_q, self.val_data)
-            logprobs_q = jax.nn.log_softmax(logits_q)
-            kl_term = optax.kl_divergence(logprobs_q, probs_p).mean()
-            l2_term = 1/2 * self.config.l2_reg * jnp.sum(b**2)
-            return kl_term + l2_term
-            
-        self.kl_fn = kl_fn
-
-    def setup_preconditioner(self):
-        adam_state, _, _ = self.adam_state
-        if self.config.use_momentum:
-            adam_vec = adam_state.mu['p']
-        else:
-            adam_vec = adam_state.nu['p']
-            
-        self.preconditioner = diag_preconditioner(
-            adam_vec,
-            eps=self.config.adam_eps,
-            exponent=self.config.adam_exponent
-        )

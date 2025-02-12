@@ -1,45 +1,41 @@
-import jax
-import jax.numpy as jnp
-from jax.numpy.linalg import norm
-from jax.scipy.special import logsumexp
+# import jax
+# import jax.numpy as jnp
+# from jax.numpy.linalg import norm
+# from jax.scipy.special import logsumexp
 import einops as eo
 from dataclasses import dataclass
 from tqdm import tqdm
-from .utils import unit, Raveler, logrectdet
-from .math import gaussint_ln_noncentral_erf, log_hyperball_volume, log_small_hyperspherical_cap
+import torch
+
+from .utils import norm, unit, logrectdet, weighted_logsumexp
+from .math import log, cos, sinc, gaussint_ln_noncentral_erf, log_hyperball_volume, log_small_hyperspherical_cap
 
 
-def find_radius_vectorized(center, vecs, cutoff, fn, *, torch_model=False,
+def find_radius_vectorized(center, vecs, cutoff, fn, *,
                            rtol=1e-1,  
                            init_mult=1, iters=10, jump=2.0):
-    mults = init_mult * jnp.ones(vecs.shape[0])
-    highs = jnp.inf * jnp.ones(vecs.shape[0])
-    lows = jnp.zeros(vecs.shape[0])
+    mults = init_mult * torch.ones(vecs.shape[0], device=vecs.device)
+    highs = torch.inf * torch.ones(vecs.shape[0], device=vecs.device)
+    lows = torch.zeros(vecs.shape[0], device=vecs.device)
 
-    if torch_model:
-        # Compute losses for each vector one at a time
-        vec_losses = jnp.array([fn(center, mults[i] * vecs[i]) for i in range(vecs.shape[0])])
-        center_losses = jnp.array([fn(center, 0)] * vecs.shape[0])
-    else:
-        vec_losses = jax.vmap(fn, in_axes=(None, 0))(center, jnp.einsum('b,bn->bn', mults, vecs))
-        center_losses = jnp.array([fn(center, 0)] * vecs.shape[0])
+    # Compute losses for each vector one at a time
+    vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(vecs.shape[0])])
+    center_losses = torch.stack([fn(center, 0)] * vecs.shape[0])
+
     deltas = vec_losses - center_losses
 
-    while iters > 0 and jnp.any(jnp.abs(deltas - cutoff) > cutoff * rtol):
-        if torch_model:
-            vec_losses = jnp.array([fn(center, mults[i] * vecs[i]) for i in range(vecs.shape[0])])
-        else:
-            vec_losses = jax.vmap(fn, in_axes=(None, 0))(center, jnp.einsum('b,bn->bn', mults, vecs))
+    while iters > 0 and any(abs(deltas - cutoff) > cutoff * rtol):
+        vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(vecs.shape[0])])
 
         deltas = vec_losses - center_losses
 
         low = deltas < cutoff
         high = deltas > cutoff
 
-        lows = jnp.where(low, mults, lows)
-        highs = jnp.where(high, mults, highs)
+        lows = torch.where(low, mults, lows)
+        highs = torch.where(high, mults, highs)
 
-        mults = jnp.where(highs == jnp.inf, mults * jump, (highs + lows) / 2)
+        mults = torch.where(highs == torch.inf, mults * jump, (highs + lows) / 2)
 
         iters -= 1
 
@@ -47,11 +43,11 @@ def find_radius_vectorized(center, vecs, cutoff, fn, *, torch_model=False,
 
 @dataclass
 class VolumeResult:
-    estimates: jnp.ndarray
-    props: jnp.ndarray
-    mults: jnp.ndarray
-    deltas: jnp.ndarray
-    logabsint: jnp.ndarray
+    estimates: torch.Tensor
+    props: torch.Tensor
+    mults: torch.Tensor
+    deltas: torch.Tensor
+    logabsint: torch.Tensor
 
 
 def get_estimates_vectorized_gauss(n, 
@@ -73,7 +69,7 @@ def get_estimates_vectorized_gauss(n,
         assert unary_fn is not None, "fn or unary_fn must be provided"
         fn = lambda a, b: unary_fn(a + b)
 
-    center = params.raveled if isinstance(params, Raveler) else params
+    center = params
     D = center.shape[0]
 
     if batch_size is None:
@@ -85,17 +81,16 @@ def get_estimates_vectorized_gauss(n,
     deltas_all = []
     logabsint_all = []
 
-    key = jax.random.key(seed)
+    torch.manual_seed(seed)
 
     for i in tqdm(range(0, n, batch_size), total=n // batch_size, disable=not with_tqdm):
-        vecs = jax.random.normal(key, (batch_size, D))
-        key, _ = jax.random.split(key)
-        vecs = jax.vmap(unit)(vecs)
+        vecs = torch.randn(batch_size, D, device=center.device)
+        vecs = unit(vecs, dim=1, keepdim=True)
         if preconditioner is not None:
             vecs = preconditioner(vecs)
 
         props = norm(vecs, axis=1)
-        uvecs = jax.vmap(unit)(vecs)
+        uvecs = unit(vecs, dim=1, keepdim=True)
 
         kwargs = {'cutoff': 1e-3, 'fn': fn, 'iters': 100, 'rtol': 1e-2, **kwargs}
         mults, deltas = find_radius_vectorized(center, vecs, **kwargs)
@@ -110,9 +105,9 @@ def get_estimates_vectorized_gauss(n,
 
         logabsint = gaussint_fn(a=a, b=b, n=D-1, x1=x1, c=c, tol=tol, y_tol=y_tol, debug=debug)
         # assert jnp.all(sgn == 1), sgn
-        logconst = log_hyperball_volume(D) + jnp.log(D) - (D/2) * jnp.log(2 * jnp.pi * sigma**2)
+        logconst = log_hyperball_volume(D) + log(D) - (D/2) * log(2 * torch.pi * sigma**2)
         # including prefactor and importance sampling correction
-        estimates = logabsint + logconst - D * jnp.log(props)
+        estimates = logabsint + logconst - D * log(props)
 
         estimates_all.append(estimates)
         props_all.append(props)
@@ -121,17 +116,17 @@ def get_estimates_vectorized_gauss(n,
         logabsint_all.append(logabsint)
 
     # concatenate all the lists
-    estimates_all = jnp.concatenate(estimates_all)
-    props_all = jnp.concatenate(props_all)
-    mults_all = jnp.concatenate(mults_all)
-    deltas_all = jnp.concatenate(deltas_all)
-    logabsint_all = jnp.concatenate(logabsint_all)
+    estimates_all = torch.cat(estimates_all)
+    props_all = torch.cat(props_all)
+    mults_all = torch.cat(mults_all)
+    deltas_all = torch.cat(deltas_all)
+    logabsint_all = torch.cat(logabsint_all)
 
     return VolumeResult(estimates_all, props_all, mults_all, deltas_all, logabsint_all)
 
 
-def aggregate(estimates, **kwargs):
-    return logsumexp(jnp.array(estimates), b=1/len(estimates), **kwargs)
+def aggregate(estimates, dim=-1, **kwargs):
+    return weighted_logsumexp(estimates, w=torch.ones_like(estimates)/len(estimates), dim=dim, **kwargs)
 
 
 # without Gaussian weighting
@@ -147,10 +142,11 @@ def get_estimates_vectorized(n,
         assert unary_fn is not None, "fn or unary_fn must be provided"
         fn = lambda a, b: unary_fn(a + b)
 
-    center = params.raveled if isinstance(params, Raveler) else params
+    center = params
     D = center.shape[0]
-    vecs = jax.random.normal(jax.random.key(seed), (n, D))
-    vecs = jax.vmap(unit)(vecs)
+    torch.manual_seed(seed)
+    vecs = torch.randn(n, D, device=center.device)
+    vecs = unit(vecs, dim=1, keepdim=True)
     if preconditioner is not None:
         vecs = vecs @ preconditioner.T
 
@@ -159,7 +155,7 @@ def get_estimates_vectorized(n,
     kwargs = {'cutoff': 1e-3, 'fn': fn, 'iters': 100, 'rtol': 1e-2, **kwargs}
     mults, deltas = find_radius_vectorized(center, vecs, **kwargs)
 
-    estimates = D * jnp.log(mults) + log_hyperball_volume(D)
+    estimates = D * log(mults) + log_hyperball_volume(D)
 
     return estimates, props, mults, deltas
 
@@ -176,7 +172,7 @@ def make_fn_sphere(unary_fn):
 
         # equivalent to above but more numerically stable
         # note that jnp.sinc(x / jnp.pi) = jnp.sin(x) / x
-        x = rad * jnp.cos(theta) + vec * jnp.sinc(theta / jnp.pi)
+        x = rad * cos(theta) + vec * sinc(theta / torch.pi)
 
         # assert jnp.abs(norm(x) - norm(rad)) < 1e-5, f"norm(x) = {norm(x)}, norm(rad) = {norm(rad)}"
 
@@ -186,8 +182,8 @@ def make_fn_sphere(unary_fn):
 
 def check_preconditioner(preconditioner, rhat):
     logdet = logrectdet(preconditioner)
-    assert jnp.abs(logdet) < 1.0, f"logrectdet(preconditioner) = {logdet}"
-    maxradial = jnp.max(jnp.abs(rhat @ preconditioner))
+    assert abs(logdet) < 1.0, f"logrectdet(preconditioner) = {logdet}"
+    maxradial = max(abs(rhat @ preconditioner))
     assert maxradial < 1e-3, f"max(abs(rhat @ preconditioner)) = {maxradial}"
 
 def get_estimates_sphere_vectorized(n, 
@@ -207,22 +203,23 @@ def get_estimates_sphere_vectorized(n,
     if preconditioner is not None:
         check_preconditioner(preconditioner, rhat)
 
+    torch.manual_seed(seed)
     if preconditioner is None:
-        vecs = jax.random.normal(jax.random.key(seed), (n, center.shape[0]))
+        vecs = torch.randn(n, center.shape[0], device=center.device)
     else:
-        vecs = jax.random.normal(jax.random.key(seed), (n, preconditioner.shape[1]))
-        vecs = jax.vmap(unit)(vecs)
+        vecs = torch.randn(n, preconditioner.shape[1], device=center.device)
+        vecs = unit(vecs, dim=1, keepdim=True)
         vecs = vecs @ preconditioner.T
     # project vecs onto tangent space
-    vecs = vecs - jnp.outer(vecs @ rhat, rhat)
+    vecs = vecs - torch.outer(vecs @ rhat, rhat)
     if preconditioner is None:
-        vecs = jax.vmap(unit)(vecs)
+        vecs = unit(vecs, dim=1, keepdim=True)
 
     props = norm(vecs, axis=1)
 
     mults, deltas = find_radius_vectorized(center, vecs, cutoff=1e-3, fn=fn, iters=100, rtol=1e-2)
     thetas = mults * props / norm(center)
     D = center.shape[0]
-    logvols = log_small_hyperspherical_cap(D, thetas) - (D - 1) * jnp.log(props)
+    logvols = log_small_hyperspherical_cap(D, thetas) - (D - 1) * log(props)
 
     return logvols, props, mults, deltas

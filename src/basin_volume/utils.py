@@ -1,13 +1,14 @@
-import jax
-import jax.numpy as jnp
+# import jax
+# import jax.numpy as jnp
 from dataclasses import dataclass
-from jax.flatten_util import ravel_pytree
-from typing import Callable
-from jax.numpy.linalg import norm
+# from jax.flatten_util import ravel_pytree
+from typing import Callable, Tuple, Union
+# from jax.numpy.linalg import norm
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
 import torch
+from torch import norm
 
 BASIN_VOLUME_DIR = "/mnt/ssd-1/adam/basin-volume"
 
@@ -15,44 +16,90 @@ BASIN_VOLUME_DIR = "/mnt/ssd-1/adam/basin-volume"
 def unit(v, **kwargs):
     return v / norm(v, **kwargs)
 
-@dataclass
-class Raveler:
-    raveled: jnp.ndarray
-    unravel: Callable
 
-    def __init__(self, params, unravel=None):
-        if isinstance(params, dict):
-            self.raveled, self.unravel = ravel_pytree(params)
-        else:
-            assert isinstance(params, jnp.ndarray), "params must be a JAX array or a dict"
-            self.raveled = params
-            assert unravel is not None, "unravel must be provided if params are raveled"
-            self.unravel = unravel
+# https://github.com/PhilippDahlinger/torch_weighted_logsumexp
+def weighted_logsumexp(
+    logx: torch.Tensor,
+    w: torch.Tensor,
+    dim: int,
+    keepdim: bool = False,
+    return_sign: bool = False,
+) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    """
+    from https://github.com/PhilippDahlinger/torch_weighted_logsumexp
     
-    @property
-    def unraveled(self):
-        return self.unravel(self.raveled)
+    This is a Pytorch port of the Tensorflow function `reduce_weighted_logsumexp` from
+    https://www.tensorflow.org/probability/api_docs/python/tfp/math/reduce_weighted_logsumexp
+    Computes log(abs(sum(weight * exp(elements across tensor dimensions)))) in a numerically stable way.
+    Right now, it only supports to perform the operation over 1 dimension. (mandatory parameter)
+    :param logx: Tensor to reduce
+    :param w: weights, has to be same shape as logx
+    :param dim: dimension to reduce
+    :param keep_dim: if True, retains reduced dimensions with length 1
+    :param return_sign: if True, return the sign of weight * exp(elements across tensor dimensions)))
+    :return: Either the reduced tensor or a tuple of the reduced tensor and the sign
+    """
+    log_absw_x = logx + torch.log(torch.abs(w))
+    max_log_absw_x = torch.amax(log_absw_x, dim=dim, keepdim=True)
+    max_log_absw_x = torch.where(
+        torch.isinf(max_log_absw_x),
+        torch.zeros(torch.Size([]), dtype=max_log_absw_x.dtype, device=max_log_absw_x.device),
+        max_log_absw_x)
+    wx_over_absw_x = torch.sign(w) * torch.exp(log_absw_x - max_log_absw_x)
+    sum_wx_over_max_absw_x = torch.sum(wx_over_absw_x, dim=dim, keepdim=keepdim)
+    if not keepdim:
+        max_log_absw_x = torch.squeeze(max_log_absw_x, dim=dim)
+    sgn = torch.sign(sum_wx_over_max_absw_x)
+    lswe = max_log_absw_x + torch.log(sgn * sum_wx_over_max_absw_x)
+    if return_sign:
+        return lswe, sgn
+    else:
+        return lswe
+
+
+# @dataclass
+# class Raveler:
+#     raveled: jnp.ndarray
+#     unravel: Callable
+
+#     def __init__(self, params, unravel=None):
+#         if isinstance(params, dict):
+#             self.raveled, self.unravel = ravel_pytree(params)
+#         else:
+#             assert isinstance(params, jnp.ndarray), "params must be a JAX array or a dict"
+#             self.raveled = params
+#             assert unravel is not None, "unravel must be provided if params are raveled"
+#             self.unravel = unravel
     
-    @property
-    def norm(self):
-        return jnp.linalg.norm(self.raveled)
+#     @property
+#     def unraveled(self):
+#         return self.unravel(self.raveled)
+    
+#     @property
+#     def norm(self):
+#         return jnp.linalg.norm(self.raveled)
     
 
 def orthogonal_complement(r):
     r = unit(r)
-    eye = jnp.eye(r.shape[0])
+    eye = torch.eye(r.shape[0], device=r.device)
     u = eye[0] - r
     u = unit(u)
-    hou = eye - 2 * jnp.outer(u, u)
+    # Householder matrix
+    hou = eye - 2 * torch.outer(u, u)
     return hou[:, 1:]
+
 def logrectdet(M):
-    return jnp.sum(jnp.log(jnp.linalg.svdvals(M)))
+    return torch.sum(torch.log(torch.linalg.svdvals(M)))
 
 def rectdet(M):
-    return jnp.exp(logrectdet(M))
+    return torch.exp(logrectdet(M))
+
 def logspace(start, end, num):
-    return 10**jnp.linspace(jnp.log10(start), jnp.log10(end), num)
-linspace = jnp.linspace
+    return 10**np.linspace(np.log10(start), np.log10(end), num)
+
+linspace = np.linspace
+
 def logspace_indices(length, num):
     # logarithically spaced indices from each end towards the middle
     num_beginning = num // 2 + 1
@@ -61,7 +108,7 @@ def logspace_indices(length, num):
     beginning -= 1
     end = length - logspace(1, (length - length // 2) + 1, num_end + 1)
     end = end[-2::-1]
-    return jnp.concatenate([beginning, end]).astype(int)    
+    return np.concatenate([beginning, end]).astype(int)    
 
 
 def normal_probability_plot(data, figsize=(10, 6), title="Normal Probability Plot"):
@@ -77,18 +124,18 @@ def normal_probability_plot(data, figsize=(10, 6), title="Normal Probability Plo
     - fig, ax: matplotlib figure and axis objects
     """
     # Convert to JAX array if it's not already
-    if not isinstance(data, jnp.ndarray):
-        data = jnp.array(data)
+    if not isinstance(data, np.ndarray):
+        data = np.array(data)
     
     # Normalize the data
-    normalized_data = (data - jnp.mean(data)) / jnp.std(data)
+    normalized_data = (data - np.mean(data)) / np.std(data)
     
     # Sort the normalized data
-    sorted_data = jnp.sort(normalized_data)
+    sorted_data = np.sort(normalized_data)
     
     # Calculate theoretical quantiles
     n = len(sorted_data)
-    theoretical_quantiles = stats.norm.ppf((jnp.arange(1, n+1) - 0.5) / n)
+    theoretical_quantiles = stats.norm.ppf((np.arange(1, n+1) - 0.5) / n)
     
     # Create the plot
     fig, ax = plt.subplots(figsize=figsize)
@@ -128,7 +175,7 @@ def summarize(obj, size_limit=10, str_limit=100):
     return out
 
 def get_info(obj):
-    if isinstance(obj, jax.Array) or isinstance(obj, np.ndarray) or isinstance(obj, torch.Tensor):
+    if isinstance(obj, np.ndarray) or isinstance(obj, torch.Tensor):  # or isinstance(obj, jax.Array)
         return {'shape': obj.shape, 'dtype': obj.dtype, 'device': obj.device}
     else:
         return None
@@ -136,7 +183,7 @@ def get_info(obj):
 def get_contents(obj, size_limit):
     if isinstance(obj, torch.nn.parameter.Parameter):
         return obj.tolist()
-    elif isinstance(obj, jax.Array) or isinstance(obj, np.ndarray) or isinstance(obj, torch.Tensor):
+    elif isinstance(obj, np.ndarray) or isinstance(obj, torch.Tensor):  # or isinstance(obj, jax.Array)
         return obj.tolist()
     elif isinstance(obj, dict):
         return [{'key': summarize(k, size_limit), 'value': summarize(v, size_limit)} for k, v in obj.items()]
@@ -150,7 +197,7 @@ def get_contents(obj, size_limit):
 def get_size(obj):
     if isinstance(obj, torch.nn.parameter.Parameter):
         return obj.numel()
-    elif isinstance(obj, jax.Array) or isinstance(obj, np.ndarray):
+    elif isinstance(obj, np.ndarray):  # or isinstance(obj, jax.Array)
         return obj.size
     elif isinstance(obj, torch.Tensor):
         return obj.numel()
@@ -171,7 +218,7 @@ def flatten_dict(d):
 
 def scaled_histogram(values, label, settings, nbins=None):
     if nbins is None:
-        nbins = int(jnp.sqrt(len(values)))
-    counts, bins = jnp.histogram(values, bins=nbins)
+        nbins = int(np.sqrt(len(values)))
+    counts, bins = np.histogram(values, bins=nbins)
     counts = counts / counts.max()
     plt.stairs(counts, bins, **dict(settings, label=label))
