@@ -79,13 +79,11 @@ See `notebooks/bigmlp_basins.ipynb` for usage.
 
 `.../convnext.py`: ConvNeXt on `cifar10`
 
+`.../data.py`: data preprocessing (from `sparsify`)
+
 `.../estimator.py`: classes for managing experiments and models
 
 `.../math.py`: integrals and such for high-dim geometry
-
-`.../mlp.py`: MLP on `digits`
-
-`.../mlp_training.py`: training code for `digits` (messy)
 
 `.../precondition.py`: preconditioners
 

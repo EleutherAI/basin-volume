@@ -125,7 +125,7 @@ class VolumeEstimator(ABC):
         elif config.model_type == "convnext":
             return ConvNextEstimator(config)
         elif config.model_type == "mlp":
-            return MLPEstimator(config)
+            raise NotImplementedError("MLP requires JAX, see branch `jax-hybrid`")
         elif config.model_type == "causal":
             assert config.model is not None, "model must be provided for causal models"
             assert config.tokenizer is not None, "tokenizer must be provided for causal models"
@@ -362,8 +362,3 @@ class ConvNextEstimator(VolumeEstimator):
         )
         self.adam1 = adam1
         self.adam2 = adam2
-
-
-class MLPEstimator(VolumeEstimator):
-    def setup_model(self):
-        raise NotImplementedError("MLPEstimator is not implemented")
