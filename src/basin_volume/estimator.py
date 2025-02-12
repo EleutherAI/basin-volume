@@ -11,7 +11,7 @@ from datasets import Dataset
 from .data import chunk_and_tokenize
 from .volume import get_estimates_vectorized_gauss, VolumeResult
 from .precondition import matrix_preconditioner, diag_preconditioner
-from .utils import Raveler, BASIN_VOLUME_DIR
+from .utils import BASIN_VOLUME_DIR
 from .pythia import *
 from .convnext import (
     load_convnext_checkpoint,
@@ -115,7 +115,6 @@ class VolumeEstimator(ABC):
             y_tol=self.config.y_tol,
             seed=self.config.seed,
             cutoff=self.config.cutoff,
-            torch_model=isinstance(self, (PythiaEstimator, ConvNextEstimator, CausalLMEstimator)),
             with_tqdm=self.config.tqdm
         )
     
@@ -227,7 +226,7 @@ class CausalLMEstimator(VolumeEstimator):
                 kl_sum += torch.mean(kl_seq_masked)
             
             kl_term = kl_sum / len(self.val_data)
-            l2_term = 1/2 * self.config.l2_reg * torch.sum(b**2)
+            l2_term = 1/2 * self.config.l2_reg * torch.sum(b**2) if isinstance(b, torch.Tensor) else 0
             return kl_term + l2_term
             
         self.kl_fn = kl_fn

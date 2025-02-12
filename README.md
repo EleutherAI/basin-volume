@@ -1,13 +1,10 @@
 # basin-volume
 Precisely estimating the volume of basins in neural net parameter space corresponding to interpretable behaviors
 
-Currently being cleaned up as of 2025-02-07.
-
 
 ## Installation
 
-* Use Python 3.11
-* `pip install -U "jax[cuda12]"`
+* Python 3.11 is recommended
 * `pip install -e .` or `pip install .`
 
 
@@ -64,16 +61,19 @@ This setting controls how the original (unperturbed, center-of-basin) model outp
 
 ## Usage (models from the paper)
 
-See `notebooks/bigmlp_basins.ipynb` for an MLP on `digits`.
+An interface for ConvNeXt and Pythia is available through `src/basin_volume/estimator.py`, with example usage (similar to the HuggingFace interface above) in `scripts/expt_paper.py`.
 
-A tidier interface (for ConvNeXt and Pythia) is available through `src/basin_volume/estimator.py`, with example usage (similar to the HuggingFace interface above) in `scripts/expt_paper.py`.
+The MLP on `digits` is implemented in JAX on the branch `jax-hybrid`, which has additional dependencies:
+
+* `pip install -U "jax[cuda12]"`
+* `pip install -e .` or `pip install .`
+
+See `notebooks/bigmlp_basins.ipynb` for usage.
 
 
 ## Structure
 
 `notebooks/`: Jupyter notebooks
-
-`.../bigmlp_basins.ipynb`: mostly-clean example of package usage
 
 `src/basin_volume/`: package source
 

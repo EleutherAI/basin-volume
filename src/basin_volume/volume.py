@@ -89,7 +89,7 @@ def get_estimates_vectorized_gauss(n,
         if preconditioner is not None:
             vecs = preconditioner(vecs)
 
-        props = norm(vecs, axis=1)
+        props = norm(vecs, dim=1)
         uvecs = unit(vecs, dim=1, keepdim=True)
 
         kwargs = {'cutoff': 1e-3, 'fn': fn, 'iters': 100, 'rtol': 1e-2, **kwargs}
@@ -150,7 +150,7 @@ def get_estimates_vectorized(n,
     if preconditioner is not None:
         vecs = vecs @ preconditioner.T
 
-    props = norm(vecs, axis=1)
+    props = norm(vecs, dim=1)
 
     kwargs = {'cutoff': 1e-3, 'fn': fn, 'iters': 100, 'rtol': 1e-2, **kwargs}
     mults, deltas = find_radius_vectorized(center, vecs, **kwargs)
@@ -215,7 +215,7 @@ def get_estimates_sphere_vectorized(n,
     if preconditioner is None:
         vecs = unit(vecs, dim=1, keepdim=True)
 
-    props = norm(vecs, axis=1)
+    props = norm(vecs, dim=1)
 
     mults, deltas = find_radius_vectorized(center, vecs, cutoff=1e-3, fn=fn, iters=100, rtol=1e-2)
     thetas = mults * props / norm(center)

@@ -15,7 +15,6 @@ dependencies = [
 	"pyyaml",
 	"scikit-learn",
 	"matplotlib",
-	"flax",
 	"torch",
 	"einops ",
 	"simple_parsing",
