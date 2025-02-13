@@ -24,7 +24,7 @@ from .convnext import (
 class VolumeConfig:
     # Common parameters
     n_samples: int = 100
-    batch_size: Optional[int] = None
+    model_batch_size: Optional[int] = None
     sigma: Optional[float] = None  # If None, compute from params
     l2_reg: float = 0.0
     cutoff: float = 1e-2
@@ -48,6 +48,7 @@ class VolumeConfig:
     max_seq_len: Optional[int] = None
     cache_mode: Literal[None, "cpu", "gpu"] = None
     chunking: bool = False
+    data_batch_size: Optional[int] = None
 
     # Preconditioner params
     preconditioner_type: Literal[None, "adam"] = None
@@ -106,7 +107,7 @@ class VolumeEstimator(ABC):
             
         return get_estimates_vectorized_gauss(
             n=self.config.n_samples,
-            batch_size=self.config.batch_size,
+            batch_size=self.config.model_batch_size,
             sigma=self.config.sigma,
             preconditioner=self.preconditioner,
             fn=self.kl_fn,
@@ -137,8 +138,10 @@ class VolumeEstimator(ABC):
 
 class CausalLMEstimator(VolumeEstimator):
     def set_defaults(self):
-        if self.config.batch_size is None:
-            self.config.batch_size = 1
+        if self.config.model_batch_size is None:
+            self.config.model_batch_size = 1
+        if self.config.data_batch_size is None:
+            self.config.data_batch_size = 1
         if self.config.max_seq_len is None:
             self.config.max_seq_len = 2048
         if self.config.val_size is None:
@@ -182,11 +185,11 @@ class CausalLMEstimator(VolumeEstimator):
         self.val_data = tokens.to("cuda")
         
         if self.config.cache_mode:
-            # Process sequences one at a time and store probs on CPU
+            # Process sequences data_batch_size at a time and store probs on CPU
             probs_p_list = []
-            for seq in self.val_data:
-                seq_expanded = seq.unsqueeze(0)  # Add batch dimension
-                logits = self.apply_fn(self.params, seq_expanded)
+            for i in range(0, self.val_data.shape[0], self.config.data_batch_size):
+                seqs = self.val_data[i:i+self.config.data_batch_size]
+                logits = self.apply_fn(self.params, seqs)
                 probs = torch.nn.functional.softmax(logits, dim=-1)
                 if self.config.cache_mode == "cpu":
                     probs_p_list.append(probs.to("cpu"))
@@ -202,30 +205,32 @@ class CausalLMEstimator(VolumeEstimator):
         def kl_fn(a, b):
             params_q = a + b
             kl_sum = 0.0
+            count = 0
             
-            # Process one sequence at a time
-            for i, seq in enumerate(self.val_data):
-                seq_expanded = seq.unsqueeze(0)
-                logits_q = self.apply_fn(params_q, seq_expanded)
+            # Process one batch at a time
+            for i in range(0, self.val_data.shape[0], self.config.data_batch_size):
+                seqs = self.val_data[i:i+self.config.data_batch_size]
+                logits_q = self.apply_fn(params_q, seqs)
                 logprobs_q = torch.nn.functional.log_softmax(logits_q, dim=-1)
                 
                 if self.config.cache_mode is None:
-                    logits_p = self.apply_fn(self.params, seq_expanded)
+                    logits_p = self.apply_fn(self.params, seqs)
                     probs_p_seq = torch.nn.functional.softmax(logits_p, dim=-1)
-                # Move just this sequence's probs to GPU
+                # Move just this batch's probs to GPU
                 elif self.config.cache_mode == "cpu":
-                    probs_p_seq = self.probs_p[i:i+1].to("cuda")
+                    probs_p_seq = self.probs_p[i:i+self.config.data_batch_size].to("cuda")
                 elif self.config.cache_mode == "gpu":
-                    probs_p_seq = self.probs_p[i:i+1]
+                    probs_p_seq = self.probs_p[i:i+self.config.data_batch_size]
                 else:
                     raise ValueError(f"Invalid cache mode: {self.config.cache_mode}")
                 
                 kl_seq = torch.nn.functional.kl_div(logprobs_q, probs_p_seq, reduction="none").sum(dim=-1)
-                mask = seq_expanded != self.tokenizer.pad_token_id
+                mask = seqs != self.tokenizer.pad_token_id
                 kl_seq_masked = kl_seq[mask]
-                kl_sum += torch.mean(kl_seq_masked)
+                kl_sum += torch.sum(kl_seq_masked)
+                count += torch.sum(mask)
             
-            kl_term = kl_sum / len(self.val_data)
+            kl_term = kl_sum / count
             l2_term = 1/2 * self.config.l2_reg * torch.sum(b**2) if isinstance(b, torch.Tensor) else 0
             return kl_term + l2_term
             
@@ -244,8 +249,8 @@ class PythiaEstimator(VolumeEstimator):
             self.config.checkpoint_step = steps[-1]
         if self.config.val_size is None:
             self.config.val_size = 10
-        if self.config.batch_size is None:
-            self.config.batch_size = 1
+        if self.config.model_batch_size is None:
+            self.config.model_batch_size = 1
         if self.config.preconditioner_eps is None:
             self.config.preconditioner_eps = 1e-5
         if self.config.preconditioner_exponent is None:
@@ -307,8 +312,8 @@ class ConvNextEstimator(VolumeEstimator):
             self.config.checkpoint_step = 2**16
         if self.config.val_size is None:
             self.config.val_size = 1024
-        if self.config.batch_size is None:
-            self.config.batch_size = 1
+        if self.config.model_batch_size is None:
+            self.config.model_batch_size = 1
         if self.config.preconditioner_eps is None:
             self.config.preconditioner_eps = 1e-5
         if self.config.preconditioner_exponent is None:
