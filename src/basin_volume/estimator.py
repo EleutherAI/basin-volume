@@ -55,6 +55,11 @@ class VolumeConfig:
     preconditioner_exponent: float = 0.5
     adam_order: int = 2  # 1 for exp_avg, 2 for exp_avg_sq
 
+    # Added for CausalLMEstimator
+    param_device_1: str = "cuda:1"
+    param_device_2: str = "cuda:2"
+    compute_device: str = "cuda:0"
+
 class VolumeEstimator(ABC):
     def __init__(self, config: VolumeConfig):
         self.config = config
@@ -102,7 +107,8 @@ class VolumeEstimator(ABC):
 
     def run(self) -> VolumeResult:
         if self.config.sigma is None:
-            self.config.sigma = torch.sqrt(torch.mean(self.params**2))
+            sigma_cpu = torch.sqrt(torch.mean(self.params.to(self.config.param_device_2)**2))
+            self.config.sigma = sigma_cpu.to(self.config.param_device_1)
             
         return get_estimates_vectorized_gauss(
             n=self.config.n_samples,
@@ -114,6 +120,7 @@ class VolumeEstimator(ABC):
             tol=self.config.tol,
             y_tol=self.config.y_tol,
             seed=self.config.seed,
+            additional_device=self.config.param_device_2,
             cutoff=self.config.cutoff,
             with_tqdm=self.config.tqdm
         )
@@ -145,6 +152,12 @@ class CausalLMEstimator(VolumeEstimator):
             self.config.val_size = 10
         if self.config.text_key is None:
             self.config.text_key = "text"
+        if not hasattr(self.config, 'param_device_1'):
+            self.config.param_device_1 = "cuda:1"
+        if not hasattr(self.config, 'param_device_2'):
+            self.config.param_device_2 = "cuda:2"
+        if not hasattr(self.config, 'compute_device'):
+            self.config.compute_device = "cuda:0"
             
     def setup_model(self):
         self.model = self.config.model
@@ -152,34 +165,41 @@ class CausalLMEstimator(VolumeEstimator):
         self.dataset = self.config.dataset
 
         self.model.eval()
-        self.model.to("cuda")
+        self.model.to(self.config.compute_device)
             
-        # Convert params to JAX
-        trained_params_t = torch.nn.utils.parameters_to_vector(self.model.parameters()).detach()
+        # Convert params to tensor on specified device
+        trained_params_t = (torch.nn.utils.parameters_to_vector(self.model.parameters())
+                          .detach()
+                          .to(self.config.param_device_1)
+                          .to(torch.bfloat16))
         self.params = trained_params_t
 
         self.config.tol = self.params.shape[0] * 10 / 2**24
         self.config.y_tol = self.config.tol * 10
         
         # Set up apply_fn and kl_fn
-        def apply_fn(params, x):
-            params_t = torch.from_dlpack(params)
+        def apply_fn(params_cpu, x):
+            params_t = torch.from_dlpack(params_cpu.to(x.device))
             torch.nn.utils.vector_to_parameters(params_t, self.model.parameters())
-            return self.model(x).logits.detach()
+            return self.model.hf_model(x).logits.detach()
             
         self.apply_fn = apply_fn
 
+        # Process tokens
         if self.config.chunking:
-            tokens = chunk_and_tokenize(self.dataset, self.tokenizer, max_seq_len=self.config.max_seq_len, text_key=self.config.text_key)["input_ids"]
+            tokens = chunk_and_tokenize(self.dataset, self.tokenizer, 
+                                      max_seq_len=self.config.max_seq_len, 
+                                      text_key=self.config.text_key)["input_ids"]
         else:
             tokens = self.tokenizer(self.dataset[self.config.text_key], 
-                                    padding=True, 
-                                    truncation=True, 
-                                    max_length=self.config.max_seq_len, 
-                                    return_tensors="pt")['input_ids']
+                                  padding=True, 
+                                  truncation=True, 
+                                  max_length=self.config.max_seq_len, 
+                                  return_tensors="pt")['input_ids']
+        
         print(f"{tokens.shape=}")
         tokens = tokens[:self.config.val_size]
-        self.val_data = tokens.to("cuda")
+        self.val_data = tokens.to(self.config.compute_device)
         
         if self.config.cache_mode:
             # Process sequences one at a time and store probs on CPU
@@ -206,11 +226,11 @@ class CausalLMEstimator(VolumeEstimator):
             # Process one sequence at a time
             for i, seq in enumerate(self.val_data):
                 seq_expanded = seq.unsqueeze(0)
-                logits_q = self.apply_fn(params_q, seq_expanded)
+                logits_q = self.apply_fn(params_q, seq_expanded).to(params_q.device)
                 logprobs_q = torch.nn.functional.log_softmax(logits_q, dim=-1)
                 
                 if self.config.cache_mode is None:
-                    logits_p = self.apply_fn(self.params, seq_expanded)
+                    logits_p = self.apply_fn(self.params, seq_expanded).to(params_q.device)
                     probs_p_seq = torch.nn.functional.softmax(logits_p, dim=-1)
                 # Move just this sequence's probs to GPU
                 elif self.config.cache_mode == "cpu":
@@ -221,7 +241,7 @@ class CausalLMEstimator(VolumeEstimator):
                     raise ValueError(f"Invalid cache mode: {self.config.cache_mode}")
                 
                 kl_seq = torch.nn.functional.kl_div(logprobs_q, probs_p_seq, reduction="none").sum(dim=-1)
-                mask = seq_expanded != self.tokenizer.pad_token_id
+                mask = seq_expanded.to(params_q.device) != self.tokenizer.pad_token_id
                 kl_seq_masked = kl_seq[mask]
                 kl_sum += torch.mean(kl_seq_masked)
             

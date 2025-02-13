@@ -63,12 +63,14 @@ def get_estimates_vectorized_gauss(n,
                                    tol=1e-2,
                                    y_tol=5,
                                    seed=42,
+                                   additional_device=None,
                                    with_tqdm=True,
                                    **kwargs):
     if fn is None:
         assert unary_fn is not None, "fn or unary_fn must be provided"
         fn = lambda a, b: unary_fn(a + b)
 
+    device = additional_device or params.device
     center = params
     D = center.shape[0]
 
@@ -84,21 +86,23 @@ def get_estimates_vectorized_gauss(n,
     torch.manual_seed(seed)
 
     for i in tqdm(range(0, n, batch_size), total=n // batch_size, disable=not with_tqdm):
-        vecs = torch.randn(batch_size, D, device=center.device)
+        vecs = torch.randn(batch_size, D, device=device).to(torch.bfloat16).to(center.device)
         vecs = unit(vecs, dim=1, keepdim=True)
         if preconditioner is not None:
             vecs = preconditioner(vecs)
 
-        props = norm(vecs, dim=1)
-        uvecs = unit(vecs, dim=1, keepdim=True)
+        props = norm(vecs, dim=1).to(center.device)
 
         kwargs = {'cutoff': 1e-3, 'fn': fn, 'iters': 100, 'rtol': 1e-2, **kwargs}
         mults, deltas = find_radius_vectorized(center, vecs, **kwargs)
 
         x1 = mults * props
         a = 1 / sigma**2
-        b = -(uvecs @ center) / sigma**2
-        c = -(center @ center) / (2 * sigma**2)
+        normalized_vecs = unit(vecs, dim=1, keepdim=True)
+        
+        # Split the computation into chunks
+        b = -chunked_matmul(normalized_vecs, center.unsqueeze(-1)).squeeze(-1) / sigma**2
+        c = -(chunked_matmul(center.unsqueeze(0), center.unsqueeze(-1)) / (2 * sigma**2)).squeeze(-1)
 
         if debug:
             print(f"{a.shape=}\n{b.shape=}\n{c.shape=}")
@@ -223,3 +227,32 @@ def get_estimates_sphere_vectorized(n,
     logvols = log_small_hyperspherical_cap(D, thetas) - (D - 1) * log(props)
 
     return logvols, props, mults, deltas
+
+def chunked_matmul(a, b, chunk_size=int(2e9)):
+    """Performs matrix multiplication in chunks to handle very large dimensions.
+    
+    Args:
+        a: tensor of shape (m, k) or (batch, m, k)
+        b: tensor of shape (k, n) or (batch, k, n)
+        chunk_size: maximum number of elements to process at once
+    
+    Returns:
+        result: tensor of shape (m, n) or (batch, m, n)
+    """
+    if a.dim() == 2:
+        a = a.unsqueeze(0)
+        b = b.unsqueeze(0)
+        squeeze_result = True
+    else:
+        squeeze_result = False
+
+    batch, m, k = a.shape
+    _, k2, n = b.shape
+    assert k == k2, f"Inner dimensions must match: {k} != {k2}"
+    
+    result = torch.zeros(batch, m, n, device=a.device, dtype=a.dtype)
+    for start_idx in range(0, k, chunk_size):
+        end_idx = min(start_idx + chunk_size, k)
+        result += a[:, :, start_idx:end_idx] @ b[:, start_idx:end_idx, :]
+    
+    return result.squeeze(0) if squeeze_result else result
