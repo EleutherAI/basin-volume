@@ -112,6 +112,9 @@ def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, y_tol=5, debug=False)
     mu = b / a
     center = mu / 2
     dist = sqrt(mu**2 + 4 * n / a) / 2
+    if debug:
+        print(f"{a = }\n{b = }\n{n = }\n{x1 = }\n{c = }")
+        print(f"{mu = }\n{center = }\n{dist = }")
     global_max = center + dist
     global_in_range = global_max <= x1
     if debug:

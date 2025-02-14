@@ -5,23 +5,27 @@ import torch
 
 from .utils import norm, unit, logrectdet, weighted_logsumexp, print_gpu_memory
 from .math import log, cos, sinc, gaussint_ln_noncentral_erf, log_hyperball_volume, log_small_hyperspherical_cap
-
+from .vectors import ImplicitVector, ImplicitRandomVector
 
 def find_radius_vectorized(center, vecs, cutoff, fn, *,
                            rtol=1e-1,  
                            init_mult=1, iters=10, jump=2.0):
-    mults = init_mult * torch.ones(vecs.shape[0], device=vecs.device)
-    highs = torch.inf * torch.ones(vecs.shape[0], device=vecs.device)
-    lows = torch.zeros(vecs.shape[0], device=vecs.device)
+    batch_size = len(vecs)
+    device = vecs[0].device
+    implicit = isinstance(center, ImplicitVector)
+
+    mults = init_mult * torch.ones(batch_size, device=device)
+    highs = torch.inf * torch.ones(batch_size, device=device)
+    lows = torch.zeros(batch_size, device=device)
 
     # Compute losses for each vector one at a time
-    vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(vecs.shape[0])])
-    center_losses = torch.stack([fn(center, 0)] * vecs.shape[0])
+    vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(batch_size)])
+    center_losses = torch.stack([fn(center, 0)] * batch_size)
 
     deltas = vec_losses - center_losses
 
     while iters > 0 and any(abs(deltas - cutoff) > cutoff * rtol):
-        vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(vecs.shape[0])])
+        vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(batch_size)])
 
         deltas = vec_losses - center_losses
 
@@ -60,8 +64,11 @@ def get_estimates_vectorized_gauss(n,
                                    seed=42,
                                    with_tqdm=True,
                                    **kwargs):
+    implicit = isinstance(params, ImplicitVector)
+
     if fn is None:
         assert unary_fn is not None, "fn or unary_fn must be provided"
+        assert not implicit, "params must be a concrete vector"
         fn = lambda a, b: unary_fn(a + b)
 
     center = params
@@ -79,20 +86,39 @@ def get_estimates_vectorized_gauss(n,
     torch.manual_seed(seed)
 
     for i in tqdm(range(0, n, batch_size), total=n // batch_size, disable=not with_tqdm):
-        vecs = torch.randn(batch_size, D, device=center.device)
-        vecs = unit(vecs, dim=1, keepdim=True)
+        if implicit:
+            assert batch_size == 1, "batch_size must be 1 for implicit vectors"
+            vecs = [ImplicitRandomVector(seed+i, params)]
+        else:
+            vecs = torch.randn(batch_size, D, device=center.device)
+        if debug:
+            print("after randn")
+            print_gpu_memory()
+        if implicit:
+            vecs = [unit(vecs[0])]
+        else:
+            vecs = unit(vecs, dim=1, keepdim=True)
         if preconditioner is not None:
+            assert not implicit, "preconditioner only supported for concrete vectors"
             vecs = preconditioner(vecs)
 
-        props = norm(vecs, dim=1)
+        if implicit:
+            props = norm(vecs[0]).unsqueeze(0)
+        else:
+            props = norm(vecs, dim=1)
+        if debug:
+            print_gpu_memory()
 
         kwargs = {'cutoff': 1e-3, 'fn': fn, 'iters': 100, 'rtol': 1e-2, **kwargs}
         mults, deltas = find_radius_vectorized(center, vecs, **kwargs)
 
         x1 = mults * props
         a = 1 / sigma**2
-        b = -(vecs @ center) / (sigma**2 * props)
+        vc = (vecs[0] @ center).unsqueeze(0) if implicit else vecs @ center
+        b = -vc / (sigma**2 * props)
         c = -(center @ center) / (2 * sigma**2)
+        if debug:
+            print_gpu_memory()
 
         if debug:
             print(f"{a.shape=}\n{b.shape=}\n{c.shape=}")

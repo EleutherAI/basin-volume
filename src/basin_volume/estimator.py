@@ -17,6 +17,7 @@ from .convnext import (
     get_convnext_logits,
     load_convnext_adam_vectors
 )
+from .vectors import ImplicitVector, ImplicitParamVector, ImplicitRandomVector
 
 @dataclass
 class VolumeConfig:
@@ -30,6 +31,7 @@ class VolumeConfig:
     y_tol: float = 5
     seed: int = 42
     tqdm: bool = True
+    debug: bool = False
 
     # Model-specific parameters
     model_type: Literal["causal", "pythia", "convnext", "mlp"] = "causal"
@@ -39,14 +41,19 @@ class VolumeConfig:
     split: Literal[None, "clean", "poison", "val"] = None  # For convnext
 
     # For HF models
+    # Model and dataset params
     model: Optional[AutoModelForCausalLM] = None
     tokenizer: Optional[AutoTokenizer] = None
     dataset: Optional[Dataset] = None
     text_key: Optional[str] = None
     max_seq_len: Optional[int] = None
+    # Cache params
     cache_mode: Literal[None, "cpu", "gpu"] = None
     chunking: bool = False
     data_batch_size: Optional[int] = None
+    # Implicit vectors params
+    implicit_vectors: bool = False
+    block_size: int = 1024**2
 
     # Preconditioner params
     preconditioner_type: Literal[None, "adam"] = None
@@ -101,7 +108,9 @@ class VolumeEstimator(ABC):
 
     def run(self) -> VolumeResult:
         if self.config.sigma is None:
-            self.config.sigma = torch.sqrt(torch.mean(self.params**2))
+            self.config.sigma = torch.sqrt((self.params @ self.params) / self.params.shape[0])
+        if self.config.debug:
+            print(f"{self.config.sigma = }")
             
         return get_estimates_vectorized_gauss(
             n=self.config.n_samples,
@@ -114,7 +123,8 @@ class VolumeEstimator(ABC):
             y_tol=self.config.y_tol,
             seed=self.config.seed,
             cutoff=self.config.cutoff,
-            with_tqdm=self.config.tqdm
+            with_tqdm=self.config.tqdm,
+            debug=self.config.debug
         )
     
     @classmethod
@@ -154,15 +164,21 @@ class CausalLMEstimator(VolumeEstimator):
 
         self.model.eval()
         self.model.to("cuda")
-            
-        self.params = torch.nn.utils.parameters_to_vector(self.model.parameters()).detach()
+
+        if self.config.implicit_vectors:
+            self.params = ImplicitParamVector(self.model, self.config.block_size)
+        else:
+            self.params = torch.nn.utils.parameters_to_vector(self.model.parameters()).detach()
 
         self.config.tol = self.params.shape[0] * 10 / 2**24
         self.config.y_tol = self.config.tol * 10
         
         # Set up apply_fn and kl_fn
         def apply_fn(params, x):
-            torch.nn.utils.vector_to_parameters(params, self.model.parameters())
+            if self.config.implicit_vectors:
+                assert params.module == self.model, "module must match"
+            else:
+                torch.nn.utils.vector_to_parameters(params, self.model.parameters())
             return self.model(x).logits.detach()
             
         self.apply_fn = apply_fn
@@ -198,14 +214,24 @@ class CausalLMEstimator(VolumeEstimator):
             self.probs_p = None
         
         def kl_fn(a, b):
-            params_q = a + b
+            if self.config.implicit_vectors:
+                assert a == self.params, "a must be the same as the model parameters"
+            else:
+                params_q = a + b
             kl_sum = 0.0
             count = 0
             
             # Process one batch at a time
             for i in range(0, self.val_data.shape[0], self.config.data_batch_size):
                 seqs = self.val_data[i:i+self.config.data_batch_size]
-                logits_q = self.apply_fn(params_q, seqs)
+                if self.config.implicit_vectors:
+                    if b:
+                        a.add_(b)
+                    logits_q = self.apply_fn(a, seqs)
+                    if b:
+                        a.sub_(b)
+                else:
+                    logits_q = self.apply_fn(params_q, seqs)
                 logprobs_q = torch.nn.functional.log_softmax(logits_q, dim=-1)
                 
                 if self.config.cache_mode is None:
@@ -226,13 +252,17 @@ class CausalLMEstimator(VolumeEstimator):
                 count += torch.sum(mask)
             
             kl_term = kl_sum / count
-            l2_term = 1/2 * self.config.l2_reg * torch.sum(b**2) if isinstance(b, torch.Tensor) else 0
+            if self.config.l2_reg:
+                b_sq = b @ b if b else 0
+                l2_term = 1/2 * self.config.l2_reg * b_sq
+            else:
+                l2_term = 0
             return kl_term + l2_term
             
         self.kl_fn = kl_fn
 
     def load_adam_vector(self):
-        raise NotImplementedError("CausalLMEstimator does not support ADAM vector loading")
+        raise NotImplementedError("CausalLMEstimator does not support ADAM preconditioning")
 
 
 class PythiaEstimator(VolumeEstimator):

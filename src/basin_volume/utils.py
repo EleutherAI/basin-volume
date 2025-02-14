@@ -4,14 +4,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
 import torch
-from torch import norm
+
+from .vectors import ImplicitVector
 
 BASIN_VOLUME_DIR = "/mnt/ssd-1/adam/basin-volume"
 
+def norm(v, **kwargs):
+    if isinstance(v, ImplicitVector):
+        assert kwargs.get('dim', 0) == 0
+        return v.norm
+    else:
+        return torch.norm(v, **kwargs)
 
 def unit(v, **kwargs):
     return v / norm(v, **kwargs)
-
 
 # https://github.com/PhilippDahlinger/torch_weighted_logsumexp
 def weighted_logsumexp(
