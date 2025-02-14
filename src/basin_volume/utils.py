@@ -1,9 +1,5 @@
-# import jax
-# import jax.numpy as jnp
-from dataclasses import dataclass
-# from jax.flatten_util import ravel_pytree
-from typing import Callable, Tuple, Union
-# from jax.numpy.linalg import norm
+import gc
+from typing import Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
@@ -222,3 +218,58 @@ def scaled_histogram(values, label, settings, nbins=None):
     counts, bins = np.histogram(values, bins=nbins)
     counts = counts / counts.max()
     plt.stairs(counts, bins, **dict(settings, label=label))
+
+
+def list_largest_tensors():
+    # Get all tensor objects
+    tensors = []
+    for obj in gc.get_objects():
+        try:
+            if torch.is_tensor(obj):
+                tensors.append(obj)
+        except:
+            pass
+    
+    # Group tensors by memory location
+    memory_dict = {}
+    for t in tensors:
+        if t.device.type == 'cuda':
+            location = t.data_ptr()
+            if location not in memory_dict:
+                memory_dict[location] = []
+            memory_dict[location].append(t)
+    
+    # Calculate sizes and sort by memory usage
+    tensor_sizes = []
+    for location, tensor_list in memory_dict.items():
+        # Take the first tensor from each memory location
+        tensor = tensor_list[0]
+        size_mb = tensor.nelement() * tensor.element_size() / (1024 * 1024)
+        tensor_sizes.append((size_mb, tensor.size(), tensor.dtype, len(tensor_list)))
+    
+    # Sort by size in descending order
+    tensor_sizes.sort(reverse=True)
+    
+    # Calculate cumulative sizes relative to largest tensor
+    if tensor_sizes:
+        largest_size = tensor_sizes[0][0]
+        cumulative = 0
+    
+    # Print results
+    print(f"{'Size (MB)':>10} {'Cumul.(x)':>10} {'Shape':>20} {'Type':>10} {'Aliases':>8}")
+    print("-" * 60)
+    for size, shape, dtype, num_tensors in tensor_sizes:
+        cumulative += size
+        relative_cumul = cumulative / largest_size
+        print(f"{size:10.2f} {relative_cumul:10.2f} {str(shape):>20} {str(dtype):>10} {num_tensors:>8}")
+
+    
+def print_gpu_memory():
+    print()
+    if torch.cuda.is_available():
+        print(f"Current GPU memory allocated: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+        print(f"Max GPU memory allocated: {torch.cuda.max_memory_allocated() / 1024**2:.2f} MB")
+        print(f"Current GPU memory reserved: {torch.cuda.memory_reserved() / 1024**2:.2f} MB")
+        print(f"Max GPU memory reserved: {torch.cuda.max_memory_reserved() / 1024**2:.2f} MB")
+    else:
+        print("No GPU available")

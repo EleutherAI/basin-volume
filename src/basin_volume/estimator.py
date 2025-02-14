@@ -1,17 +1,15 @@
+import gc
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Union, Literal
-# import jax
-# import jax.numpy as jnp
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import Dataset
-# import optax
 
 from .data import chunk_and_tokenize
 from .volume import get_estimates_vectorized_gauss, VolumeResult
 from .precondition import matrix_preconditioner, diag_preconditioner
-from .utils import BASIN_VOLUME_DIR
+from .utils import BASIN_VOLUME_DIR, list_largest_tensors
 from .pythia import *
 from .convnext import (
     load_convnext_checkpoint,
@@ -157,17 +155,14 @@ class CausalLMEstimator(VolumeEstimator):
         self.model.eval()
         self.model.to("cuda")
             
-        # Convert params to JAX
-        trained_params_t = torch.nn.utils.parameters_to_vector(self.model.parameters()).detach()
-        self.params = trained_params_t
+        self.params = torch.nn.utils.parameters_to_vector(self.model.parameters()).detach()
 
         self.config.tol = self.params.shape[0] * 10 / 2**24
         self.config.y_tol = self.config.tol * 10
         
         # Set up apply_fn and kl_fn
         def apply_fn(params, x):
-            params_t = torch.from_dlpack(params)
-            torch.nn.utils.vector_to_parameters(params_t, self.model.parameters())
+            torch.nn.utils.vector_to_parameters(params, self.model.parameters())
             return self.model(x).logits.detach()
             
         self.apply_fn = apply_fn

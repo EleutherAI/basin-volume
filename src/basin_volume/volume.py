@@ -1,13 +1,9 @@
-# import jax
-# import jax.numpy as jnp
-# from jax.numpy.linalg import norm
-# from jax.scipy.special import logsumexp
 import einops as eo
 from dataclasses import dataclass
 from tqdm import tqdm
 import torch
 
-from .utils import norm, unit, logrectdet, weighted_logsumexp
+from .utils import norm, unit, logrectdet, weighted_logsumexp, print_gpu_memory
 from .math import log, cos, sinc, gaussint_ln_noncentral_erf, log_hyperball_volume, log_small_hyperspherical_cap
 
 
@@ -49,7 +45,6 @@ class VolumeResult:
     deltas: torch.Tensor
     logabsint: torch.Tensor
 
-
 def get_estimates_vectorized_gauss(n, 
                                    sigma,
                                    *,
@@ -85,20 +80,23 @@ def get_estimates_vectorized_gauss(n,
 
     for i in tqdm(range(0, n, batch_size), total=n // batch_size, disable=not with_tqdm):
         vecs = torch.randn(batch_size, D, device=center.device)
+        print("after randn")
+        print_gpu_memory()
         vecs = unit(vecs, dim=1, keepdim=True)
         if preconditioner is not None:
             vecs = preconditioner(vecs)
 
         props = norm(vecs, dim=1)
-        uvecs = unit(vecs, dim=1, keepdim=True)
+        print_gpu_memory()
 
         kwargs = {'cutoff': 1e-3, 'fn': fn, 'iters': 100, 'rtol': 1e-2, **kwargs}
         mults, deltas = find_radius_vectorized(center, vecs, **kwargs)
 
         x1 = mults * props
         a = 1 / sigma**2
-        b = -(uvecs @ center) / sigma**2
+        b = -(vecs @ center) / (sigma**2 * props)
         c = -(center @ center) / (2 * sigma**2)
+        print_gpu_memory()
 
         if debug:
             print(f"{a.shape=}\n{b.shape=}\n{c.shape=}")
