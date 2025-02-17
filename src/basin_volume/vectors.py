@@ -45,14 +45,14 @@ class ImplicitParamVector(ImplicitVector):
         mul_factor = other.scale_factor / self.scale_factor
         with torch.no_grad():
             for param_block, other_block in zip(self.blocks(), other.blocks()):
-                param_block.add_(other_block * mul_factor)
+                param_block.add_(other_block, alpha=mul_factor)
     
     def sub_(self, other: ImplicitVector) -> None:
         """Subtract another vector from this parameter vector."""
         mul_factor = other.scale_factor / self.scale_factor
         with torch.no_grad():
             for param_block, other_block in zip(self.blocks(), other.blocks()):
-                param_block.sub_(other_block * mul_factor)
+                param_block.sub_(other_block, alpha=mul_factor)
 
 class ImplicitRandomVector(ImplicitVector):
     def __init__(self, seed: int, ref_vector: ImplicitParamVector):
