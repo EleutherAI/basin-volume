@@ -4,9 +4,10 @@ from typing import Iterator, Optional
 from functools import cached_property
 
 class ImplicitVector(ABC):
-    def __init__(self, block_size: int):
+    def __init__(self, block_size: int, device: torch.device):
         self.block_size = block_size
         self.scale_factor = 1.0
+        self.device = device
     
     @abstractmethod
     def blocks(self) -> Iterator[torch.Tensor]:
@@ -31,7 +32,7 @@ class ImplicitVector(ABC):
 
 class ImplicitParamVector(ImplicitVector):
     def __init__(self, module: torch.nn.Module, block_size: int):
-        super().__init__(block_size)
+        super().__init__(block_size, module.device)
         self.module = module
     
     def blocks(self) -> Iterator[torch.Tensor]:
@@ -56,10 +57,9 @@ class ImplicitParamVector(ImplicitVector):
 
 class ImplicitRandomVector(ImplicitVector):
     def __init__(self, seed: int, ref_vector: ImplicitParamVector):
-        super().__init__(ref_vector.block_size)
+        super().__init__(ref_vector.block_size, ref_vector.device)
         self.seed = seed
         self.ref_vector = ref_vector
-        self.device = ref_vector.module.device
         self.generator = torch.Generator(device=self.device)
     
     def __mul__(self, scalar: float) -> 'ImplicitRandomVector':
@@ -93,6 +93,7 @@ class ImplicitScaledRandomVector(ImplicitRandomVector):
     def __init__(self, unscaled_vector: ImplicitRandomVector, scale_factor: float):
         self.block_size = unscaled_vector.block_size
         self.scale_factor = scale_factor
+        self.device = unscaled_vector.device
         self.unscaled_vector = unscaled_vector
 
     def __mul__(self, scalar: float) -> 'ImplicitScaledRandomVector':
