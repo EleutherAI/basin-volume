@@ -64,8 +64,7 @@ class ImplicitRandomVector(ImplicitVector):
     
     def __mul__(self, scalar: float) -> 'ImplicitRandomVector':
         """Lazy scalar multiplication."""
-        self.scale_factor *= scalar
-        return self
+        return ImplicitScaledRandomVector(self, scalar)
     
     def __rmul__(self, scalar: float) -> 'ImplicitRandomVector':
         return self.__mul__(scalar)
@@ -86,6 +85,22 @@ class ImplicitRandomVector(ImplicitVector):
                                          device=self.device)
                 yield random_block
 
-    @property
+    @cached_property
     def norm(self) -> float:
         return torch.sqrt(self @ self)
+
+class ImplicitScaledRandomVector(ImplicitRandomVector):
+    def __init__(self, unscaled_vector: ImplicitRandomVector, scale_factor: float):
+        self.block_size = unscaled_vector.block_size
+        self.scale_factor = scale_factor
+        self.unscaled_vector = unscaled_vector
+
+    def __mul__(self, scalar: float) -> 'ImplicitScaledRandomVector':
+        return ImplicitScaledRandomVector(self.unscaled_vector, self.scale_factor * scalar)
+    
+    def blocks(self) -> Iterator[torch.Tensor]:
+        return self.unscaled_vector.blocks()
+
+    @cached_property
+    def norm(self) -> float:
+        return self.unscaled_vector.norm * self.scale_factor
