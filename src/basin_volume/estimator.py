@@ -106,6 +106,7 @@ class VolumeEstimator(ABC):
             case _:
                 raise ValueError(f"Invalid preconditioner type: {self.config.preconditioner_type}")
 
+    @torch.inference_mode()
     def run(self) -> VolumeResult:
         if self.config.sigma is None:
             self.config.sigma = torch.sqrt((self.params @ self.params) / self.params.shape[0])
