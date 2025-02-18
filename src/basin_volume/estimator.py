@@ -180,7 +180,10 @@ class CausalLMEstimator(VolumeEstimator):
                 assert params.module == self.model, "module must match"
             else:
                 torch.nn.utils.vector_to_parameters(params, self.model.parameters())
-            return self.model(x).logits.detach()
+            if hasattr(self.model, "hf_model"):
+                return self.model.hf_model(x).logits.detach()
+            else:
+                return self.model(x).logits.detach()
             
         self.apply_fn = apply_fn
 
