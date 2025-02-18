@@ -20,5 +20,6 @@ dependencies = [
 	"simple_parsing",
 	"transformers",
 	"datasets",
-	"torchvision"
+	"torchvision",
+	"pytest"
 ]
