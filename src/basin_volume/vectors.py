@@ -60,7 +60,6 @@ class ImplicitRandomVector(ImplicitVector):
         super().__init__(ref_vector.block_size, ref_vector.device)
         self.seed = seed
         self.ref_vector = ref_vector
-        self.generator = torch.Generator(device=self.device)
     
     def __mul__(self, scalar: float) -> 'ImplicitRandomVector':
         """Lazy scalar multiplication."""
@@ -76,12 +75,13 @@ class ImplicitRandomVector(ImplicitVector):
         return self.__mul__(-1)
     
     def blocks(self) -> Iterator[torch.Tensor]:
-        self.generator.manual_seed(self.seed)
+        generator = torch.Generator(device=self.device)
+        generator.manual_seed(self.seed)
         for param in self.ref_vector.module.parameters():
             flat_param = param.view(-1)
             for i in range(0, flat_param.numel(), self.block_size):
                 block_size = min(self.block_size, flat_param.numel() - i)
-                random_block = torch.randn(block_size, generator=self.generator, 
+                random_block = torch.randn(block_size, generator=generator, 
                                          device=self.device)
                 yield random_block
 
