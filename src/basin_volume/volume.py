@@ -14,19 +14,18 @@ def find_radius_vectorized(center, vecs, cutoff, fn, *,
     device = vecs[0].device
     implicit = isinstance(center, ImplicitVector)
 
-    mults = init_mult * torch.ones(batch_size, device=device)
-    highs = torch.inf * torch.ones(batch_size, device=device)
-    lows = torch.zeros(batch_size, device=device)
-
-    # Compute losses for each vector one at a time
-    vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(batch_size)])
+    vec_losses = torch.stack([fn(center, init_mult * vecs[i]) for i in range(batch_size)])
     center_losses = torch.stack([fn(center, 0)] * batch_size)
-
+    output_dim = vec_losses.shape[1] if vec_losses.ndim == 2 else 1
     deltas = vec_losses - center_losses
 
-    while iters > 0 and any(abs(deltas - cutoff) > cutoff * rtol):
-        vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(batch_size)])
+    current_mult = init_mult
+    mults = init_mult * torch.ones(batch_size, output_dim, device=device)
+    highs = torch.inf * torch.ones(batch_size, output_dim, device=device)
+    lows = torch.zeros(batch_size, output_dim, device=device)
 
+    while iters > 0 and (abs(deltas - cutoff) > cutoff * rtol).any():
+        vec_losses = torch.stack([fn(center, current_mult * vecs[i]) for i in range(batch_size)])
         deltas = vec_losses - center_losses
 
         low = deltas < cutoff
@@ -34,8 +33,13 @@ def find_radius_vectorized(center, vecs, cutoff, fn, *,
 
         lows = torch.where(low, mults, lows)
         highs = torch.where(high, mults, highs)
+        
+        current_mult *= jump
 
-        mults = torch.where(highs == torch.inf, mults * jump, (highs + lows) / 2)
+        # Update mults array
+        mults = torch.where(highs == torch.inf, 
+                           current_mult, 
+                           (highs + lows) / 2)
 
         iters -= 1
 
@@ -122,8 +126,7 @@ def get_estimates_vectorized_gauss(n,
 
         if debug:
             print(f"{a.shape=}\n{b.shape=}\n{c.shape=}")
-
-        logabsint = gaussint_fn(a=a, b=b, n=D-1, x1=x1, c=c, tol=tol, y_tol=y_tol, debug=debug)
+        logabsint = gaussint_fn(a=a, b=b.expand_as(x1), n=D-1, x1=x1, c=c, tol=tol, y_tol=y_tol, debug=debug)
         # assert jnp.all(sgn == 1), sgn
         logconst = log_hyperball_volume(D) + log(D) - (D/2) * log(2 * torch.pi * sigma**2)
         # including prefactor and importance sampling correction
