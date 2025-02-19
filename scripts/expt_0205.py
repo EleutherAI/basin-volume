@@ -1,4 +1,4 @@
-from basin_volume import *
+from tyche import *
 from tqdm import tqdm
 import pickle
 import os
