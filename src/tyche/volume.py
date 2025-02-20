@@ -10,44 +10,94 @@ from .vectors import ImplicitVector, ImplicitRandomVector
 def find_radius_vectorized(center, vecs, cutoff, fn, *,
                            rtol=1e-1,  
                            init_mult=1, iters=10, jump=2.0):
-    batch_size = len(vecs)
-    device = vecs[0].device
-    implicit = isinstance(center, ImplicitVector)
+    """
+    Find the basin radius for a function along a batch of direction vectors.
+    This uses a binary search, multiplying by `jump` when unbounded above.
 
+    Args:
+        center: The center of the basin.
+        vecs: A batch of direction vectors.
+        cutoff: The cutoff value for the basin radius.
+        fn: The function to evaluate.
+        rtol: The relative tolerance on the cutoff.
+        init_mult: The initial multiplier to try.
+        iters: The maximum number of iterations to run.
+        jump: The jump factor.
+
+    Returns:
+        mults: basin radius, in units of `vecs` length.
+        deltas: fn(center, mults * vecs) - fn(center, 0)
+
+    If `iters` is not reached, then:
+        abs(deltas - cutoff) <= cutoff * rtol
+
+    Caveats:
+        - The actual function evaluation is not vectorized (difficult in Torch)
+        - Assumes `fn` is monotonic (but often works even if it isn't)
+        - The basin radius is mults * norm(vecs), not mults
+        - Fails silently if `iters` is reached (TODO: raise an error?)
+    """
+    # number of direction vectors
+    batch_size = len(vecs)
+
+    device = vecs[0].device
+
+    # current guess for the radius
     mults = init_mult * torch.ones(batch_size, device=device)
+    # upper and lower bounds on the radius: inf and zero
     highs = torch.inf * torch.ones(batch_size, device=device)
     lows = torch.zeros(batch_size, device=device)
 
-    # Compute losses for each vector one at a time
+    # Compute losses for each vector at current guess multiplier
     vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(batch_size)])
+    # loss at center
     center_losses = torch.stack([fn(center, 0)] * batch_size)
 
+    # difference between vector and center
     deltas = vec_losses - center_losses
 
     while iters > 0 and any(abs(deltas - cutoff) > cutoff * rtol):
+        # Compute losses for each vector at current guess multiplier
         vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(batch_size)])
 
+        # difference between vector and center
         deltas = vec_losses - center_losses
 
+        # indices where the loss is too low
         low = deltas < cutoff
+        # indices where the loss is too high
         high = deltas > cutoff
 
+        # update the bounds
         lows = torch.where(low, mults, lows)
         highs = torch.where(high, mults, highs)
 
+        # update the guess
+        # bisect if upper bound is finite, otherwise multiply by `jump`
         mults = torch.where(highs == torch.inf, mults * jump, (highs + lows) / 2)
 
+        # decrement the iteration count
         iters -= 1
 
     return mults, deltas
 
 @dataclass
 class VolumeResult:
+    """
+    Results of volume estimation.
+
+    Attributes:
+        estimates: The estimated log-probability.
+        props: Lengths of proposal vectors.
+        mults: Multipliers (relative to `props`) for the basin radius.
+        deltas: Difference between fn at basin edge and center.
+        gaussint: Log of Gaussian integral term.
+    """
     estimates: torch.Tensor
     props: torch.Tensor
     mults: torch.Tensor
     deltas: torch.Tensor
-    logabsint: torch.Tensor
+    gaussint: torch.Tensor
 
 def get_estimates_vectorized_gauss(n, 
                                    sigma,
@@ -81,7 +131,7 @@ def get_estimates_vectorized_gauss(n,
     props_all = []
     mults_all = []
     deltas_all = []
-    logabsint_all = []
+    gaussint_all = []
 
     torch.manual_seed(seed)
 
@@ -91,13 +141,16 @@ def get_estimates_vectorized_gauss(n,
             vecs = [ImplicitRandomVector(seed+i, params)]
         else:
             vecs = torch.randn(batch_size, D, device=center.device)
+
         if debug:
             print("after randn")
             print_gpu_memory()
+
         if implicit:
             vecs = [unit(vecs[0])]
         else:
             vecs = unit(vecs, dim=1, keepdim=True)
+            
         if preconditioner is not None:
             assert not implicit, "preconditioner only supported for concrete vectors"
             vecs = preconditioner(vecs)
@@ -123,26 +176,25 @@ def get_estimates_vectorized_gauss(n,
         if debug:
             print(f"{a.shape=}\n{b.shape=}\n{c.shape=}")
 
-        logabsint = gaussint_fn(a=a, b=b, n=D-1, x1=x1, c=c, tol=tol, y_tol=y_tol, debug=debug)
-        # assert jnp.all(sgn == 1), sgn
+        gaussint = gaussint_fn(a=a, b=b, n=D-1, x1=x1, c=c, tol=tol, y_tol=y_tol, debug=debug)
         logconst = log_hyperball_volume(D) + log(D) - (D/2) * log(2 * torch.pi * sigma**2)
         # including prefactor and importance sampling correction
-        estimates = logabsint + logconst - D * log(props)
+        estimates = gaussint + logconst - D * log(props)
 
         estimates_all.append(estimates)
         props_all.append(props)
         mults_all.append(mults)
         deltas_all.append(deltas)
-        logabsint_all.append(logabsint)
+        gaussint_all.append(gaussint)
 
     # concatenate all the lists
     estimates_all = torch.cat(estimates_all)
     props_all = torch.cat(props_all)
     mults_all = torch.cat(mults_all)
     deltas_all = torch.cat(deltas_all)
-    logabsint_all = torch.cat(logabsint_all)
+    gaussint_all = torch.cat(gaussint_all)
 
-    return VolumeResult(estimates_all, props_all, mults_all, deltas_all, logabsint_all)
+    return VolumeResult(estimates_all, props_all, mults_all, deltas_all, gaussint_all)
 
 
 def aggregate(estimates, dim=-1, **kwargs):
