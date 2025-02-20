@@ -126,7 +126,8 @@ class VolumeEstimator(ABC):
             seed=self.config.seed,
             cutoff=self.config.cutoff,
             with_tqdm=self.config.tqdm,
-            debug=self.config.debug
+            debug=self.config.debug,
+            estimator=self
         )
     
     @classmethod
@@ -217,7 +218,17 @@ class CausalLMEstimator(VolumeEstimator):
         else:
             self.probs_p = None
         
-        def kl_fn(a, b):
+        def kl_fn(a, b, mults=None):
+            def compute_multiplier(b, mults, i):
+                if mults is None:
+                    return b
+                elif mults.shape[0] == self.val_data.shape[0]:
+                    return mults[i] * b
+                elif mults.shape[0] == 1:
+                    return mults[0] * b
+                else:
+                    raise ValueError(f"Invalid mults: {mults}")
+
             if self.config.implicit_vectors:
                 assert a == self.params, "a must be the same as the model parameters"
             else:
@@ -235,10 +246,10 @@ class CausalLMEstimator(VolumeEstimator):
                 seqs = self.val_data[i:i+self.config.data_batch_size]
                 if self.config.implicit_vectors:
                     if b:
-                        a.add_(b)
+                        a.add_(compute_multiplier(b, mults, i))
                     logits_q = self.apply_fn(a, seqs)
                     if b:
-                        a.sub_(b)
+                        a.sub_(compute_multiplier(b, mults, i))
                 else:
                     logits_q = self.apply_fn(params_q, seqs)
                 logprobs_q = torch.nn.functional.log_softmax(logits_q, dim=-1)

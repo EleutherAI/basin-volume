@@ -5,7 +5,7 @@ import torch
 
 from .utils import norm, unit, logrectdet, weighted_logsumexp, print_gpu_memory
 from .math import log, cos, sinc, gaussint_ln_noncentral_erf, log_hyperball_volume, log_small_hyperspherical_cap
-from .vectors import ImplicitVector, ImplicitRandomVector
+from .vectors import ImplicitVector, ImplicitRandomVector, ImplicitParamVector
 
 def find_radius_vectorized(center, vecs, cutoff, fn, *,
                            rtol=1e-1,  
@@ -14,18 +14,17 @@ def find_radius_vectorized(center, vecs, cutoff, fn, *,
     device = vecs[0].device
     implicit = isinstance(center, ImplicitVector)
 
-    vec_losses = torch.stack([fn(center, init_mult * vecs[i]) for i in range(batch_size)])
+    vec_losses = torch.stack([fn(center, vecs[i], torch.tensor([init_mult])) for i in range(batch_size)])
     center_losses = torch.stack([fn(center, 0)] * batch_size)
     output_dim = vec_losses.shape[1] if vec_losses.ndim == 2 else 1
     deltas = vec_losses - center_losses
 
-    current_mult = init_mult
     mults = init_mult * torch.ones(batch_size, output_dim, device=device)
     highs = torch.inf * torch.ones(batch_size, output_dim, device=device)
     lows = torch.zeros(batch_size, output_dim, device=device)
 
     while iters > 0 and (abs(deltas - cutoff) > cutoff * rtol).any():
-        vec_losses = torch.stack([fn(center, current_mult * vecs[i]) for i in range(batch_size)])
+        vec_losses = torch.stack([fn(center, vecs[i], mults[i]) for i in range(batch_size)])
         deltas = vec_losses - center_losses
 
         low = deltas < cutoff
@@ -34,14 +33,15 @@ def find_radius_vectorized(center, vecs, cutoff, fn, *,
         lows = torch.where(low, mults, lows)
         highs = torch.where(high, mults, highs)
         
-        current_mult *= jump
-
         # Update mults array
         mults = torch.where(highs == torch.inf, 
-                           current_mult, 
+                           mults*jump, 
                            (highs + lows) / 2)
 
         iters -= 1
+
+
+    print(f"mults mean: {mults.mean()}, deltas mean: {deltas.mean()}")
 
     return mults, deltas
 
@@ -65,8 +65,9 @@ def get_estimates_vectorized_gauss(n,
                                    debug=False,
                                    tol=1e-2,
                                    y_tol=5,
-                                   seed=42,
+                                   seed=43,
                                    with_tqdm=True,
+                                   estimator=None,
                                    **kwargs):
     implicit = isinstance(params, ImplicitVector)
 
@@ -90,6 +91,9 @@ def get_estimates_vectorized_gauss(n,
     torch.manual_seed(seed)
 
     for i in tqdm(range(0, n, batch_size), total=n // batch_size, disable=not with_tqdm):
+        if estimator is not None and isinstance(params, ImplicitParamVector):
+            estimator.params = ImplicitParamVector(estimator.model, estimator.config.block_size)
+            center = estimator.params
         if implicit:
             assert batch_size == 1, "batch_size must be 1 for implicit vectors"
             vecs = [ImplicitRandomVector(seed+i, params)]
