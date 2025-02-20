@@ -41,27 +41,29 @@ def find_radius_vectorized(center, vecs, cutoff, fn, *,
     batch_size = len(vecs)
 
     device = vecs[0].device
-
-    # current guess for the radius
-    mults = init_mult * torch.ones(batch_size, device=device)
-    # upper and lower bounds on the radius: inf and zero
-    highs = torch.inf * torch.ones(batch_size, device=device)
-    lows = torch.zeros(batch_size, device=device)
-
     # Compute losses for each vector at current guess multiplier
-    vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(batch_size)])
+    vec_losses = torch.stack([fn(center, vecs[i], torch.tensor([init_mult])) for i in range(batch_size)])
     # loss at center
     center_losses = torch.stack([fn(center, 0)] * batch_size)
+
+    # Infer output dimension from vec_losses
+    output_dim = vec_losses.shape[1] if vec_losses.ndim == 2 else 1
+
+    # current guess for the radius
+    mults = init_mult * torch.ones(batch_size, output_dim, device=device)
+    # upper and lower bounds on the radius: inf and zero
+    highs = torch.inf * torch.ones(batch_size, output_dim, device=device)
+    lows = torch.zeros(batch_size, output_dim, device=device)
 
     # difference between vector and center
     deltas = vec_losses - center_losses
 
-    while any(abs(deltas - cutoff) > cutoff * rtol):
+    while (abs(deltas - cutoff) > cutoff * rtol).any():
         if iters == 0:
             raise ValueError("Maximum number of iterations reached without converging")
 
         # Compute losses for each vector at current guess multiplier
-        vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(batch_size)])
+        vec_losses = torch.stack([fn(center, vecs[i], mults[i]) for i in range(batch_size)])
 
         # difference between vector and center
         deltas = vec_losses - center_losses

@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from basin_volume import VolumeConfig, VolumeEstimator
+from tyche import VolumeConfig, VolumeEstimator
 
 def test_volume_estimator_and_model_parameters():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -50,6 +50,26 @@ def test_volume_estimator_and_model_parameters():
     assert torch.all(diff < 5 * std_non_imp/torch.sqrt(torch.tensor(len(result_non_imp.estimates)))), "Implicit and non-implicit estimates differ too much"
     print(f"normalized diff: {diff/std_non_imp/torch.sqrt(torch.tensor(len(result_non_imp.estimates)))}")
     
+    cfg_implicit_2 = VolumeConfig(
+        model=model,
+        tokenizer=tokenizer,
+        dataset=dataset,
+        text_key="text",
+        n_samples=40,
+        cutoff=1e-2,
+        max_seq_len=2048,
+        val_size=10,
+        chunking=False,
+        implicit_vectors=True,
+        reduction=None
+    )
+    estimator_imp_2 = VolumeEstimator.from_config(cfg_implicit_2)
+    result_imp_2 = estimator_imp_2.run()
+
+    diff_2 = torch.abs(result_imp_2.estimates.mean() - result_imp.estimates.mean())
+    assert torch.all(diff_2 < 5 * std_non_imp/torch.sqrt(torch.tensor(len(result_imp.estimates)))), "Implicit and non-implicit estimates differ too much"
+    print(f"normalized diff: {diff_2/std_non_imp/torch.sqrt(torch.tensor(len(result_imp.estimates)))}")
+
     model2 = AutoModelForCausalLM.from_pretrained("EleutherAI/pythia-14m").to(device)
     vec1 = torch.nn.utils.parameters_to_vector(model.parameters())
     vec2 = torch.nn.utils.parameters_to_vector(model2.parameters())

@@ -89,11 +89,11 @@ def f012_int_ln(center, x1, f0, f1, f2, debug=False):
         print()
         print("f012_int_ln terms:")
         print(f"{upper = }\n{lower = }")
-    assert all(upper > lower), "upper must be greater than lower"
+    assert (upper > lower).all(), "upper must be greater than lower"
     diff = weighted_logsumexp(torch.stack([upper, lower], dim=-1), 
                             w=torch.tensor([1, -1], device=upper.device), 
                             dim=-1)
-    if any(upper - diff > log(1e5)):
+    if (upper - diff > log(1e5)).any():
         if debug:
             print()
             print(f"{diff = }\n{upper - diff = }")
@@ -120,6 +120,7 @@ def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, y_tol=5, debug=False)
     if debug:
         print(f"{global_max=}, {global_in_range=}")
     max_pt = torch.minimum(global_max, x1)
+    print(max_pt)
     # get approximation stuff
     log_fn = log_fn_rel_factory(a, b, n, max_pt)
     dlog_fn = dlog_fn_factory(a, b, n)
@@ -146,7 +147,7 @@ def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, y_tol=5, debug=False)
     # global out of range:
     # extrapolate down by tol
     rad_x1 = f1 / -f2 - sqrt(f1**2 / f2**2 + 2 * y_tol / -f2)
-    if any(~global_in_range & (abs(f1/-f2) > 1e5 * torch.minimum(abs(y_tol / f1), abs(rad_x1)))):
+    if (~global_in_range & (abs(f1/-f2) > 1e5 * torch.minimum(abs(y_tol / f1), abs(rad_x1)))).any():
         # catastrophic cancellation in rad_x1, use linear approximation
         if debug:
             print()
@@ -158,7 +159,7 @@ def gaussint_ln_noncentral_erf(a, b, n, x1, c=0, tol=1e-2, y_tol=5, debug=False)
 
     # branch
     abs_error = torch.where(global_in_range, abs_error_global, abs_error_x1)
-    if any(abs_error > tol):
+    if (abs_error > tol).any():
         # check accuracy of approximation; in practice tol is extremely conservative
         # empirically, tol of 0.03 is still accurate to about +-1e-7 in the log
         # (based on comparison to _normed for n=12_000, a=2, b=3, x1=100)
