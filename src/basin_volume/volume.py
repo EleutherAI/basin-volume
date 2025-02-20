@@ -39,6 +39,7 @@ def find_radius_vectorized(center, vecs, cutoff, fn, *,
                            (highs + lows) / 2)
 
         iters -= 1
+        # breakpoint()
 
 
     print(f"mults mean: {mults.mean()}, deltas mean: {deltas.mean()}")

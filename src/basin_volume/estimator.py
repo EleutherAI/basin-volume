@@ -232,6 +232,7 @@ class CausalLMEstimator(VolumeEstimator):
             if self.config.implicit_vectors:
                 assert a == self.params, "a must be the same as the model parameters"
             else:
+                b = compute_multiplier(b, mults, 0)
                 params_q = a + b
             if self.config.reduction == "mean":
                 kl_sum = 0.0
@@ -251,6 +252,9 @@ class CausalLMEstimator(VolumeEstimator):
                     if b:
                         a.sub_(compute_multiplier(b, mults, i))
                 else:
+                    if mults and mults.shape[0] == self.val_data.shape[0]:
+                        b = compute_multiplier(b, mults, i)
+                        params_q = a + b
                     logits_q = self.apply_fn(params_q, seqs)
                 logprobs_q = torch.nn.functional.log_softmax(logits_q, dim=-1)
                 
@@ -334,7 +338,11 @@ class PythiaEstimator(VolumeEstimator):
         logits_p = self.apply_fn(self.params, self.val_data)
         probs_p = torch.nn.functional.softmax(logits_p, dim=-1)
         
-        def kl_fn(a, b):
+        def kl_fn(a, b, mults=None):
+            if mults:
+                if mults.shape[0] != 1:
+                    raise ValueError(f"Invalid mults: {mults}; reduction = None not supported for pythia")
+                b = mults[0] * b
             params_q = a + b
             logits_q = self.apply_fn(params_q, self.val_data)
             logprobs_q = torch.nn.functional.log_softmax(logits_q, dim=-1)
@@ -397,7 +405,11 @@ class ConvNextEstimator(VolumeEstimator):
         logits_p = self.apply_fn(self.params, self.val_data)
         probs_p = torch.nn.functional.softmax(logits_p, dim=-1)
         
-        def kl_fn(a, b):
+        def kl_fn(a, b, mults=None):
+            if mults:
+                if mults.shape[0] != 1:
+                    raise ValueError(f"Invalid mults: {mults}; reduction = None not supported for convnext")
+                b = mults[0] * b
             params_q = a + b
             logits_q = self.apply_fn(params_q, self.val_data)
             logprobs_q = torch.nn.functional.log_softmax(logits_q, dim=-1)
