@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from basin_volume import VolumeConfig, VolumeEstimator
+from tyche import VolumeConfig, VolumeEstimator
 
 def test_volume_estimator_and_model_parameters():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

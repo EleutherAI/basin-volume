@@ -127,7 +127,6 @@ class VolumeEstimator(ABC):
             cutoff=self.config.cutoff,
             with_tqdm=self.config.tqdm,
             debug=self.config.debug,
-            estimator=self
         )
     
     @classmethod

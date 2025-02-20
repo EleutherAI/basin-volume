@@ -3,7 +3,7 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "basin_volume"
+name = "tyche"
 description = "NN basin volume estimation"
 readme = "README.md"
 requires-python = ">=3.11"
