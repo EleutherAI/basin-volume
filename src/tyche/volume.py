@@ -56,7 +56,10 @@ def find_radius_vectorized(center, vecs, cutoff, fn, *,
     # difference between vector and center
     deltas = vec_losses - center_losses
 
-    while iters > 0 and any(abs(deltas - cutoff) > cutoff * rtol):
+    while any(abs(deltas - cutoff) > cutoff * rtol):
+        if iters == 0:
+            raise ValueError("Maximum number of iterations reached without converging")
+
         # Compute losses for each vector at current guess multiplier
         vec_losses = torch.stack([fn(center, mults[i] * vecs[i]) for i in range(batch_size)])
 
