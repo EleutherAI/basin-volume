@@ -58,7 +58,7 @@ def find_radius_vectorized(center, vecs, cutoff, fn, *,
     # difference between vector and center
     deltas = vec_losses - center_losses
 
-    while any(abs(deltas - cutoff) > cutoff * rtol):
+    while (abs(deltas - cutoff) > cutoff * rtol).any():
         if iters == 0:
             raise ValueError("Maximum number of iterations reached without converging")
 
